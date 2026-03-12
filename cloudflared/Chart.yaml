@@ -1,0 +1,5 @@
+apiVersion: v2
+name: cloudflared
+version: 1.0.0
+appVersion: "latest"
+description: Cloudflare Tunnel connector

@@ -1,0 +1,301 @@
+# =================================================================
+# Monitoring — kube-prometheus-stack values (k3s)
+# Pinned trên master (master ổn định nhất)
+# Grafana: http://<master-ip>:30300
+# Prometheus: http://<master-ip>:30090
+# =================================================================
+
+# --- Tắt các component không cần ---
+alertmanager:
+  enabled: false
+
+kubeEtcd:
+  enabled: false
+
+# --- Grafana ---
+grafana:
+  enabled: true
+  admin:
+    existingSecret: infra-secrets
+    userKey: admin-user
+    passwordKey: admin-password
+  deploymentStrategy:
+    type: Recreate
+  initChownData:
+    enabled: false
+  service:
+    type: NodePort
+    nodePort: 30300
+  persistence:
+    enabled: true
+    size: 5Gi
+    storageClassName: local-path
+  nodeSelector:
+    node-role.kubernetes.io/monitoring: "true"
+  grafana.ini:
+    server:
+      root_url: "https://grafana.<your-domain>"
+    security:
+      cookie_secure: true
+      strict_transport_security: true
+  # --- Security hardening ---
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 472
+    runAsGroup: 472
+    fsGroup: 472
+  containerSecurityContext:
+    readOnlyRootFilesystem: true
+    allowPrivilegeEscalation: false
+  resources:
+    requests:
+      memory: 128Mi
+      cpu: 100m
+    limits:
+      memory: 256Mi
+      cpu: 200m
+  additionalDataSources:
+    - name: Loki
+      type: loki
+      url: http://loki.logging.svc.cluster.local:3100
+      access: proxy
+      isDefault: false
+      jsonData:
+        maxLines: 1000
+        timeout: 60
+  imageRenderer:
+    enabled: true
+    nodeSelector:
+      node-role.kubernetes.io/monitoring: "true"
+
+# --- Prometheus ---
+prometheus:
+  service:
+    type: NodePort
+    nodePort: 30090
+  prometheusSpec:
+    scrapeInterval: 30s
+    scrapeTimeout: 25s
+    evaluationInterval: 30s
+    retention: 7d
+    walCompression: true
+    # --- Pod Disruption Budget ---
+    podDisruptionBudget:
+      enabled: true
+      minAvailable: 1
+    resources:
+      requests:
+        memory: 256Mi
+        cpu: 100m
+      limits:
+        memory: 2Gi
+        cpu: 500m
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: local-path
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 10Gi
+    nodeSelector:
+      node-role.kubernetes.io/monitoring: "true"
+    # --- Security hardening ---
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 1000
+      runAsGroup: 1000
+      fsGroup: 2000
+
+# --- Node Exporter — chạy trên TẤT CẢ nodes ---
+nodeExporter:
+  enabled: true
+
+prometheus-node-exporter:
+  # hostRootFsMount: false — tắt mount "/" vào container
+  # Cần thiết cho WSL2 nodes: WSL2 không hỗ trợ
+  # shared/slave mount propagation → "path "/" is mounted on "/" but
+  # it is not a shared or slave mount" → CreateContainerError
+  # Đánh đổi: mất collector.filesystem cho rootfs, nhưng /proc và
+  # /sys vẫn được mount → CPU, RAM, network metrics vẫn hoạt động đầy đủ
+  hostRootFsMount:
+    enabled: false
+    mountPropagation: HostToContainer
+  extraArgs:
+    # Allowlist: chỉ thu thập metrics cho mountpoint thực tế
+    # Tránh lỗi duplicate tmpfs metrics (/run/user, v.v.)
+    - --collector.filesystem.mount-points-include=^/(|boot|home|var|opt|tmp|mnt/.+|media/.+)$
+    - --collector.filesystem.fs-types-exclude=^(autofs|binfmt_misc|bpf|cgroup2?|configfs|debugfs|devpts|devtmpfs|fusectl|fuse\.lxcfs|hugetlbfs|iso9660|mqueue|nsfs|overlay|proc|procfs|pstore|rpc_pipefs|securityfs|selinuxfs|squashfs|sysfs|tracefs|tmpfs)$
+
+# --- Kube State Metrics → master ---
+kubeStateMetrics:
+  enabled: true
+
+kube-state-metrics:
+  nodeSelector:
+    node-role.kubernetes.io/monitoring: "true"
+  resources:
+    requests:
+      memory: 32Mi
+      cpu: 10m
+    limits:
+      memory: 128Mi
+      cpu: 100m
+
+# --- Prometheus Operator → master ---
+prometheusOperator:
+  nodeSelector:
+    node-role.kubernetes.io/monitoring: "true"
+  admissionWebhooks:
+    patch:
+      nodeSelector:
+        node-role.kubernetes.io/monitoring: "true"
+  resources:
+    requests:
+      memory: 64Mi
+      cpu: 50m
+    limits:
+      memory: 128Mi
+      cpu: 100m
+  containerSecurityContext:
+    readOnlyRootFilesystem: true
+    allowPrivilegeEscalation: false
+
+# =================================================================
+# Built-in PrometheusRules — Critical Alerts
+# Tự động đánh giá bởi Prometheus, xem trong Grafana Alerting
+# =================================================================
+additionalPrometheusRulesMap:
+  k3s-critical-alerts:
+    groups:
+      - name: k3s-node-alerts
+        rules:
+          # --- CPU > 85% sustained 5m ---
+          - alert: HighCPUUsage
+            expr: 100 - (avg by(instance)(rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 85
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "High CPU usage on {{ $labels.instance }}"
+              description: 'CPU usage is {{ $value | printf "%.1f" }}% (threshold 85%)'
+
+          # --- RAM > 85% sustained 5m ---
+          - alert: HighMemoryUsage
+            expr: (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100 > 85
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "High memory usage on {{ $labels.instance }}"
+              description: 'Memory usage is {{ $value | printf "%.1f" }}% (threshold 85%)'
+
+          # --- Disk > 85% ---
+          - alert: DiskAlmostFull
+            expr: (1 - node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) * 100 > 85
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Disk almost full on {{ $labels.instance }}"
+              description: 'Root disk usage is {{ $value | printf "%.1f" }}% (threshold 85%)'
+
+          # --- Node down ---
+          - alert: NodeDown
+            expr: up{job="node-exporter"} == 0
+            for: 2m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Node exporter down on {{ $labels.instance }}"
+              description: "Node exporter has been unreachable for 2 minutes"
+
+      - name: k3s-pod-alerts
+        rules:
+          # --- Pod CrashLooping ---
+          - alert: PodCrashLooping
+            expr: increase(kube_pod_container_status_restarts_total[1h]) > 3
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Pod {{ $labels.namespace }}/{{ $labels.pod }} is crash looping"
+              description: "Container {{ $labels.container }} has restarted {{ $value }} times in the last hour"
+
+          # --- Pod not ready ---
+          - alert: PodNotReady
+            expr: kube_pod_status_phase{phase=~"Pending|Unknown|Failed"} > 0
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Pod {{ $labels.namespace }}/{{ $labels.pod }} is {{ $labels.phase }}"
+              description: "Pod has been in {{ $labels.phase }} state for more than 10 minutes"
+
+          # --- Deployment replicas mismatch ---
+          - alert: DeploymentReplicasMismatch
+            expr: kube_deployment_status_replicas_unavailable > 0
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Deployment {{ $labels.namespace }}/{{ $labels.deployment }} has unavailable replicas"
+              description: "{{ $value }} replica(s) unavailable for more than 10 minutes"
+
+      - name: k3s-pvc-alerts
+        rules:
+          # --- PVC > 85% ---
+          - alert: PVCAlmostFull
+            expr: kubelet_volume_stats_used_bytes / kubelet_volume_stats_capacity_bytes * 100 > 85
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "PVC {{ $labels.namespace }}/{{ $labels.persistentvolumeclaim }} almost full"
+              description: 'PVC usage is {{ $value | printf "%.1f" }}% (threshold 85%)'
+
+      - name: k3s-loki-alerts
+        rules:
+          # --- Loki down ---
+          - alert: LokiDown
+            expr: up{job="loki"} == 0
+            for: 2m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Loki is down"
+              description: "Loki has been unreachable for 2 minutes"
+
+# =================================================================
+# ServiceMonitors — Loki + Alloy metrics (cross-namespace)
+# =================================================================
+additionalServiceMonitors:
+  - name: loki-metrics
+    namespace: monitoring
+    selector:
+      matchLabels:
+        app: loki
+    namespaceSelector:
+      matchNames:
+        - logging
+    endpoints:
+      - port: http
+        path: /metrics
+        interval: 30s
+        scrapeTimeout: 25s
+
+# --- Tắt theo dõi các K8s components không tồn tại độc lập trong K3s ---
+kubeControllerManager:
+  enabled: false
+
+kubeScheduler:
+  enabled: false
+
+kubeProxy:
+  enabled: false
+
+# --- Tắt các rule cảnh báo mặc định liên quan đến Alertmanager ---
+defaultRules:
+  create: true
+  rules:
+    alertmanager: false

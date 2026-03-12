@@ -1,0 +1,87 @@
+{{- /*
+  spark-config.yaml — ConfigMap riêng cho Spark
+  ─────────────────────────────────────────────────────────────────
+  Chứa 2 file cấu hình Spark:
+    1. spark-env.sh         — Biến môi trường runtime
+    2. spark-defaults.conf  — Cấu hình mặc định cho spark-submit / pyspark
+  ─────────────────────────────────────────────────────────────────
+  Lab 1 (mục IV.2):
+    - spark.master = spark://spark-master:7077
+      → Spark Standalone mode (dùng trình quản lý sẵn có)
+    - conf/spark-defaults.conf tương đương cấu hình trong hướng dẫn
+  Lab 3:
+    - PYSPARK_PYTHON = python3 → PySpark shell dùng Python 3
+    - PYSPARK_DRIVER_PYTHON = python3 → driver cũng dùng Python 3
+  Lab 4:
+    - spark.sql.warehouse.dir → nơi Spark SQL lưu bảng (trên HDFS)
+  Lab 7:
+    - spark.jars.packages = graphframes:graphframes:0.8.4-spark3.5-s_2.12
+      → Tự động tải GraphFrames khi chạy pyspark / spark-submit
+    - spark.jars.ivy = /tmp/.ivy2 → cache thư viện tải về
+*/ -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: spark-config
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+data:
+  # -----------------------------------------------------------------------
+  # spark-env.sh — Biến môi trường Spark runtime
+  # -----------------------------------------------------------------------
+  # File này được source khi khởi động Spark Master/Worker/Driver
+  # Tương đương conf/spark-env.sh trong hướng dẫn Bài TH số 1 (mục IV.2)
+  spark-env.sh: |
+    #!/usr/bin/env bash
+
+    # IP của pod hiện tại (inject từ Downward API env MY_POD_IP)
+    export SPARK_LOCAL_IP=$MY_POD_IP
+
+    # QUAN TRỌNG: Buộc Spark quảng bá Pod IP thay vì pod hostname
+    # Pod hostname (vd: spark-master-787c645988-n7w7f) KHÔNG resolve được
+    # từ pods trên node khác → executor crash với UnknownHostException
+    # SPARK_LOCAL_HOSTNAME env var cũng được set trực tiếp trên pod spec
+    # nhưng thêm ở đây làm fallback cho spark-submit / pyspark sessions
+    export SPARK_LOCAL_HOSTNAME=${SPARK_LOCAL_HOSTNAME:-$MY_POD_IP}
+
+    # Python 3 cho PySpark (Lab 3, 4, 5, 7)
+    export PYSPARK_PYTHON=/usr/bin/python3
+    export PYSPARK_DRIVER_PYTHON=/usr/bin/python3
+
+    # Hadoop config directory (để Spark đọc core-site.xml, hdfs-site.xml)
+    export HADOOP_CONF_DIR=/opt/hadoop/conf
+    export SPARK_DIST_CLASSPATH=/opt/hadoop/conf
+
+    # Thư mục tạm cho Spark shuffle data
+    export SPARK_WORKER_DIR=/tmp/spark-worker
+    export SPARK_LOCAL_DIRS=/tmp/spark-local
+
+    # HDFS user (tắt permission check nên dùng root cho đơn giản)
+    export HADOOP_USER_NAME=root
+
+  # -----------------------------------------------------------------------
+  # spark-defaults.conf — Cấu hình mặc định cho spark-submit / pyspark
+  # -----------------------------------------------------------------------
+  # Lab 1 (mục IV.2): spark.master = spark://tên_máy_master:7077
+  # Lab 3-7: Cấu hình mặc định khi chạy pyspark / spark-submit
+  # Có thể ghi đè bằng --master, --packages khi chạy lệnh
+  spark-defaults.conf: |
+    # Spark Master RPC endpoint (Standalone mode)
+    spark.master                          spark://spark-master:7077
+
+    # HDFS NameNode (để Spark đọc/ghi dữ liệu trên HDFS)
+    spark.hadoop.fs.defaultFS             hdfs://hadoop-namenode:9000
+
+    # GraphFrames package (Lab 7) — tự động tải khi khởi động
+    spark.jars.packages                   {{ .Values.spark.graphframes.package }}
+    spark.jars.ivy                        /tmp/.ivy2
+
+    # Spark SQL warehouse directory (Lab 4: lưu bảng tạm trên HDFS)
+    spark.sql.warehouse.dir               hdfs://hadoop-namenode:9000/spark-warehouse
+
+    # Tài nguyên driver + executor
+    spark.driver.memory                   1g
+    spark.executor.memory                 1g
+
+    # HDFS user
+    spark.hadoop.HADOOP_USER_NAME         root

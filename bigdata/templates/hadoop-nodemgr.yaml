@@ -1,0 +1,131 @@
+{{- /*
+  hadoop-nodemgr.yaml — YARN NodeManager: Headless Service + StatefulSet
+  ─────────────────────────────────────────────────────────────────
+  Vai trò: YARN Worker — thực thi MapReduce containers trên worker nodes
+#   replicas={{ .Values.workers.replicas }} (mặc định 2 workers)
+  ─────────────────────────────────────────────────────────────────
+  Lab 1 (mục III.1.c + d):
+    - NodeManager = đại diện tài nguyên của mỗi worker node
+    - Nhận YARN container từ ResourceManager → chạy Map/Reduce tasks
+    - Tương đương "nodemanager" trong jps trên máy con
+  Lab 2:
+    - Khi chạy MapReduce job → ResourceManager giao containers
+      → NodeManager thực thi trên worker nodes
+    - yarn.nodemanager.resource.memory-mb = {{ .Values.hadoop.nodemanager.memory }}
+    - yarn.nodemanager.resource.cpu-vcores = {{ .Values.hadoop.nodemanager.vcores }}
+  ─────────────────────────────────────────────────────────────────
+  WebUI mỗi NodeManager: http://<worker-tailscale-ip>:8042
+  ─────────────────────────────────────────────────────────────────
+  Luật điều phối: giống DataNode (worker nodes only, podAntiAffinity)
+*/ -}}
+
+# ==========================================================================
+# HEADLESS SERVICE: hadoop-nodemanager
+# DNS: hadoop-nodemanager-0.hadoop-nodemanager, v.v.
+# ==========================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: hadoop-nodemanager
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  clusterIP: None
+  ports:
+    - port: 8042
+      name: nm-webui            # WebUI mỗi NodeManager
+  selector:
+    app: nodemanager
+
+---
+# ==========================================================================
+# STATEFULSET: hadoop-nodemanager (worker nodes only)
+# replicas: {{ .Values.workers.replicas }}
+# ==========================================================================
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: hadoop-nodemanager
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  podManagementPolicy: Parallel
+  replicas: {{ .Values.workers.replicas }}
+  serviceName: hadoop-nodemanager
+  selector:
+    matchLabels:
+      app: nodemanager
+  template:
+    metadata:
+      labels:
+        app: nodemanager
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      # === LUẬT ĐIỀU PHỐI (Scheduling Rules) ===
+
+      # Tolerate master taint: control-plane node
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+
+      {{- if .Values.worker.nodeSelector }}
+      nodeSelector:
+{{ toYaml .Values.worker.nodeSelector | indent 8 }}
+      {{- end }}
+      affinity:
+
+        # CẤM 2 NodeManager chung 1 node
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: app
+                operator: In
+                values:
+                - nodemanager
+            topologyKey: kubernetes.io/hostname
+
+      containers:
+        - name: nodemanager
+          image: {{ .Values.hadoop.nodemanager.image }}
+          env:
+            # --- Biến ENV cho bde2020 image entrypoint ---
+
+            # HDFS: trỏ về NameNode
+            - name: CORE_CONF_fs_defaultFS
+              value: "hdfs://hadoop-namenode:9000"
+
+            # YARN: đăng ký với ResourceManager
+            - name: YARN_CONF_yarn_resourcemanager_hostname
+              value: "hadoop-resourcemanager"
+            # Dịch vụ phụ: mapreduce_shuffle
+            - name: YARN_CONF_yarn_nodemanager_aux___services
+              value: "mapreduce_shuffle"
+            # Tài nguyên mỗi NodeManager cấp cho YARN
+            - name: YARN_CONF_yarn_nodemanager_resource_memory___mb
+              value: {{ .Values.hadoop.nodemanager.memory | quote }}
+            - name: YARN_CONF_yarn_nodemanager_resource_cpu___vcores
+              value: {{ .Values.hadoop.nodemanager.vcores | quote }}
+
+            # MapReduce: framework = YARN
+            - name: MAPRED_CONF_mapreduce_framework_name
+              value: "yarn"
+            # Đường dẫn thư viện MapReduce
+            - name: MAPRED_CONF_yarn_app_mapreduce_am_env
+              value: "HADOOP_MAPRED_HOME={{ .Values.hadoop.home }}/"
+            - name: MAPRED_CONF_mapreduce_map_env
+              value: "HADOOP_MAPRED_HOME={{ .Values.hadoop.home }}/"
+            - name: MAPRED_CONF_mapreduce_reduce_env
+              value: "HADOOP_MAPRED_HOME={{ .Values.hadoop.home }}/"
+          resources:
+            requests:
+              memory: {{ .Values.hadoop.nodemanager.resources.requests.memory }}
+              cpu: {{ .Values.hadoop.nodemanager.resources.requests.cpu }}
+            limits:
+              memory: {{ .Values.hadoop.nodemanager.resources.limits.memory }}
+              cpu: {{ .Values.hadoop.nodemanager.resources.limits.cpu }}
+          ports:
+            - containerPort: 8042
+              hostPort: 8042          # WebUI — http://<worker-ip>:8042
+              name: nm-webui

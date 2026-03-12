@@ -1,0 +1,5 @@
+apiVersion: v2
+name: mssql
+description: SQL Server distributed cluster cho K3s lab
+version: 1.0.0
+appVersion: "2025"

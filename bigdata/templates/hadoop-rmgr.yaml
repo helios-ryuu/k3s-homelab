@@ -1,0 +1,129 @@
+{{- /*
+  hadoop-rmgr.yaml — YARN ResourceManager: Service + Deployment
+  ─────────────────────────────────────────────────────────────────
+  Vai trò: YARN Master — quản lý tài nguyên và lập lịch MapReduce jobs
+#   Chạy trên: management node (master)
+  ─────────────────────────────────────────────────────────────────
+  Lab 1 (mục III.1.c):
+    - ResourceManager = thành phần trung tâm của YARN
+    - Nhận MapReduce job → phân bổ tài nguyên → giao cho NodeManager
+#   Lab 2:
+#     - Truy cập WebUI: http://<master-ip>:8088
+#     - Xem trạng thái MapReduce jobs: Running, Completed, Failed
+#     - Khi chạy: bin/hadoop jar ... → job gửi đến ResourceManager
+  ─────────────────────────────────────────────────────────────────
+  Port:
+    - 8088: WebUI (xem danh sách jobs, tài nguyên cụm)
+    - 8032: YARN IPC (client submit job, NodeManager đăng ký)
+*/ -}}
+
+# ==========================================================================
+# SERVICE: hadoop-resourcemanager
+# Các thành phần khác truy cập YARN qua DNS: hadoop-resourcemanager
+# Truy cập WebUI: http://<master-ip>:8088 (qua hostPort)
+# ==========================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: hadoop-resourcemanager
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  ports:
+    - port: 8088
+      name: yarn-webui          # WebUI — xem trạng thái YARN jobs
+    - port: 8030
+      name: yarn-scheduler      # Scheduler IPC — AM xin tài nguyên
+    - port: 8031
+      name: yarn-tracker        # Resource Tracker — NodeManager đăng ký heartbeat
+    - port: 8032
+      name: yarn-ipc            # Client RPC — job submission (yarn jar ...)
+    - port: 8033
+      name: yarn-admin          # Admin RPC — yarn rmadmin commands
+  selector:
+    app: resourcemanager
+
+---
+# ==========================================================================
+# DEPLOYMENT: hadoop-resourcemanager → management node
+# ──────────────────────────────────────────────────────────────────────────
+# - nodeSelector → chạy cố định trên management node
+# - hostPort: 8088 → truy cập WebUI trực tiếp qua master IP
+# - strategy: Recreate → chỉ 1 ResourceManager (không rolling update)
+# ==========================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hadoop-resourcemanager
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate                    # Chỉ 1 ResourceManager — không rolling
+  selector:
+    matchLabels:
+      app: resourcemanager
+  template:
+    metadata:
+      labels:
+        app: resourcemanager
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      {{- if .Values.management.nodeSelector }}
+      nodeSelector:
+{{ toYaml .Values.management.nodeSelector | indent 8 }}
+      {{- end }}
+
+      containers:
+        - name: resourcemanager
+          image: {{ .Values.hadoop.resourcemanager.image }}
+          env:
+            # --- Biến ENV cho bde2020 image entrypoint ---
+
+            # -- HDFS: trỏ về NameNode --
+            - name: CORE_CONF_fs_defaultFS
+              value: "hdfs://hadoop-namenode:9000"
+
+            # -- YARN: cấu hình ResourceManager --
+            # yarn.resourcemanager.hostname = chính nó (DNS K8s)
+            - name: YARN_CONF_yarn_resourcemanager_hostname
+              value: "hadoop-resourcemanager"
+            # Dịch vụ phụ: mapreduce_shuffle (xáo trộn dữ liệu Map → Reduce)
+            - name: YARN_CONF_yarn_nodemanager_aux___services
+              value: "mapreduce_shuffle"
+            # Tài nguyên mỗi NodeManager (RAM + CPU)
+            - name: YARN_CONF_yarn_nodemanager_resource_memory___mb
+              value: {{ .Values.hadoop.nodemanager.memory | quote }}
+            - name: YARN_CONF_yarn_nodemanager_resource_cpu___vcores
+              value: {{ .Values.hadoop.nodemanager.vcores | quote }}
+
+            # -- MapReduce: framework = YARN --
+            - name: MAPRED_CONF_mapreduce_framework_name
+              value: "yarn"
+            # Đường dẫn thư viện MapReduce cho containers
+            - name: MAPRED_CONF_yarn_app_mapreduce_am_env
+              value: "HADOOP_MAPRED_HOME={{ .Values.hadoop.home }}/"
+            - name: MAPRED_CONF_mapreduce_map_env
+              value: "HADOOP_MAPRED_HOME={{ .Values.hadoop.home }}/"
+            - name: MAPRED_CONF_mapreduce_reduce_env
+              value: "HADOOP_MAPRED_HOME={{ .Values.hadoop.home }}/"
+          resources:
+            requests:
+              memory: {{ .Values.hadoop.resourcemanager.resources.requests.memory }}
+              cpu: {{ .Values.hadoop.resourcemanager.resources.requests.cpu }}
+            limits:
+              memory: {{ .Values.hadoop.resourcemanager.resources.limits.memory }}
+              cpu: {{ .Values.hadoop.resourcemanager.resources.limits.cpu }}
+          ports:
+            - containerPort: 8088
+              hostPort: 8088          # WebUI — http://<master-ip>:8088
+              name: yarn-webui
+            - containerPort: 8030
+              name: yarn-scheduler    # Scheduler IPC — AM xin tài nguyên
+            - containerPort: 8031
+              name: yarn-tracker      # Resource Tracker — NM heartbeat
+            - containerPort: 8032
+              name: yarn-ipc          # Client RPC — job submission
+            - containerPort: 8033
+              name: yarn-admin        # Admin RPC — rmadmin commands

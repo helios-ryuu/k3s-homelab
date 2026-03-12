@@ -1,0 +1,31 @@
+# =================================================================
+# Logging — Loki + Grafana Alloy (k3s)
+# Loki: http://<master-ip>:30100  (NodePort)
+# Grafana data source → http://loki.logging.svc.cluster.local:3100
+# =================================================================
+
+# --- LOKI (single-binary / monolithic mode) ---
+loki:
+  image: grafana/loki:3.6.7
+  retention: 168h # 7 ngày (khớp Prometheus)
+  storage: 10Gi
+  nodeSelector:
+    node-role.kubernetes.io/logging: "true"
+  resources:
+    requests:
+      memory: 128Mi
+      cpu: 100m
+    limits:
+      memory: 512Mi
+      cpu: 500m
+
+# --- GRAFANA ALLOY (log collector — thay thế Promtail) ---
+alloy:
+  image: grafana/alloy:v1.13.2
+  resources:
+    requests:
+      memory: 128Mi
+      cpu: 100m
+    limits:
+      memory: 256Mi
+      cpu: 200m

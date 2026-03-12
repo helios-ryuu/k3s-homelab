@@ -1,0 +1,161 @@
+{{- /*
+  spark-worker.yaml — Spark Worker: Headless Service + StatefulSet
+  ─────────────────────────────────────────────────────────────────
+  Vai trò: Thực thi Spark tasks (executors) trên worker nodes
+#   replicas={{ .Values.workers.replicas }} (mặc định 2 workers)
+  ─────────────────────────────────────────────────────────────────
+  Lab 1:  Cài đặt framework Apache Spark (phần Spark Worker)
+  Lab 3:  PySpark + RDD — executor chạy trên workers
+  Lab 4:  DataFrame + Spark SQL — executor chạy trên workers
+  Lab 5:  MLlib — executor chạy trên workers
+  Lab 7:  GraphFrames — executor chạy trên workers
+  ─────────────────────────────────────────────────────────────────
+  WebUI mỗi worker: http://<worker-tailscale-ip>:8081
+  ─────────────────────────────────────────────────────────────────
+  Luật điều phối:
+#     - CHỈ chạy trên workerNodes (distributed)
+    - CẤM 2 Spark Worker trên cùng 1 node (podAntiAffinity)
+#     - Tolerate taint control-plane (master node)
+  Fault tolerance:
+    - 1 worker offline → 1 pod Pending (bình thường)
+    - 2 workers online → đầy đủ năng lực tính toán
+*/ -}}
+
+# ==========================================================================
+# HEADLESS SERVICE: spark-worker
+# DNS tự động: spark-worker-0.spark-worker, spark-worker-1.spark-worker
+# ClusterIP: None → StatefulSet dùng DNS nội bộ để định danh
+# ==========================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: spark-worker
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  clusterIP: None
+  ports:
+    - port: 8081
+      name: worker-webui
+  selector:
+    app: spark-worker
+
+---
+# ==========================================================================
+# STATEFULSET: spark-worker (worker nodes only)
+# replicas: {{ .Values.workers.replicas }}
+# Scale: helm upgrade bigd . --set workers.replicas=3
+# ==========================================================================
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: spark-worker
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  podManagementPolicy: Parallel
+  replicas: {{ .Values.workers.replicas }}
+  serviceName: spark-worker
+  selector:
+    matchLabels:
+      app: spark-worker
+  template:
+    metadata:
+      labels:
+        app: spark-worker
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      # Tắt service links → ngăn K8s inject biến PORT (gây lỗi Spark)
+      enableServiceLinks: false
+
+      # === LUẬT ĐIỀU PHỐI (Scheduling Rules) ===
+
+      # Tolerate master taint: control-plane node
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+
+      {{- if .Values.worker.nodeSelector }}
+      nodeSelector:
+{{ toYaml .Values.worker.nodeSelector | indent 8 }}
+      {{- end }}
+      affinity:
+
+        # CẤM 2 Spark Worker chung 1 node → mỗi node 1 worker duy nhất
+        # Nếu worker node offline → pod sẽ Pending (không reschedule sang node khác)
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: app
+                operator: In
+                values:
+                - spark-worker
+            topologyKey: kubernetes.io/hostname
+
+      containers:
+        - name: spark-worker
+          image: {{ .Values.spark.worker.image }}
+          # Khởi chạy Spark Worker process
+          # Tham số: kết nối đến Spark Master RPC (7077)
+          # -c = số cores đăng ký với Master
+          # -m = RAM đăng ký với Master
+          command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.worker.Worker"]
+          args:
+            - "spark://spark-master:7077"
+            - "--webui-port"
+            - "8081"
+            - "-c"
+            - {{ .Values.spark.worker.cores | quote }}
+            - "-m"
+            - {{ .Values.spark.worker.memory | quote }}
+          env:
+            # Pod IP để Spark bind đúng network interface
+            - name: MY_POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            # QUAN TRỌNG: Worker + Executor quảng bá hostname cho Driver
+            # Không set → dùng pod hostname → Driver trên node khác KHÔNG resolve được
+            # Set = Pod IP → mọi kết nối cross-node đều hoạt động
+            - name: SPARK_LOCAL_HOSTNAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+          ports:
+            - containerPort: 8081
+              hostPort: 8081          # WebUI mỗi worker (truy cập qua Tailscale IP)
+              name: worker-webui
+          resources:
+            requests:
+              memory: {{ .Values.spark.worker.resources.requests.memory }}
+              cpu: {{ .Values.spark.worker.resources.requests.cpu }}
+            limits:
+              memory: {{ .Values.spark.worker.resources.limits.memory }}
+              cpu: {{ .Values.spark.worker.resources.limits.cpu }}
+          volumeMounts:
+            # --- Hadoop config: để Worker đọc/ghi HDFS trực tiếp ---
+            - name: hadoop-config
+              mountPath: /opt/hadoop/conf/core-site.xml
+              subPath: core-site.xml
+            - name: hadoop-config
+              mountPath: /opt/hadoop/conf/hdfs-site.xml
+              subPath: hdfs-site.xml
+            # --- Spark config: đồng bộ cấu hình với Master ---
+            - name: spark-config
+              mountPath: /opt/spark/conf/spark-env.sh
+              subPath: spark-env.sh
+            - name: spark-config
+              mountPath: /opt/spark/conf/spark-defaults.conf
+              subPath: spark-defaults.conf
+
+      volumes:
+        # ConfigMap chứa core-site.xml + hdfs-site.xml (từ hadoop-config.yaml)
+        - name: hadoop-config
+          configMap:
+            name: hadoop-config
+        # ConfigMap chứa spark-env.sh + spark-defaults.conf (từ spark-config.yaml)
+        - name: spark-config
+          configMap:
+            name: spark-config

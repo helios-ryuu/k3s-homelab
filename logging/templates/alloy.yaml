@@ -1,0 +1,242 @@
+{{- /*
+  alloy.yaml — Grafana Alloy: ConfigMap + DaemonSet + ServiceAccount + RBAC
+  Chạy trên TẤT CẢ nodes, thu thập container logs → Loki.
+  Thay thế Promtail với hỗ trợ metrics + logs + traces.
+*/ -}}
+
+# ==========================================================================
+# SERVICEACCOUNT + RBAC: alloy cần đọc pods/namespaces để enrichment
+# ==========================================================================
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: alloy
+  labels:
+    app: alloy
+    app.kubernetes.io/instance: {{ .Release.Name }}
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: alloy
+  labels:
+    app: alloy
+    app.kubernetes.io/instance: {{ .Release.Name }}
+rules:
+  - apiGroups: [""]
+    resources: ["nodes", "nodes/proxy", "nodes/metrics", "services", "endpoints", "pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "watch"]
+  - nonResourceURLs: ["/metrics", "/metrics/cadvisor"]
+    verbs: ["get"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: alloy
+  labels:
+    app: alloy
+    app.kubernetes.io/instance: {{ .Release.Name }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: alloy
+subjects:
+  - kind: ServiceAccount
+    name: alloy
+    namespace: {{ .Release.Namespace }}
+
+---
+# ==========================================================================
+# CONFIGMAP: alloy-config (Alloy River config format)
+# ==========================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alloy-config
+  labels:
+    app: alloy
+    app.kubernetes.io/instance: {{ .Release.Name }}
+data:
+  config.alloy: |
+    // ======================================================================
+    // Grafana Alloy — Kubernetes log collection → Loki
+    // ======================================================================
+
+    // --- Discover all pods on this node ---
+    discovery.kubernetes "pods" {
+      role = "pod"
+
+      selectors {
+        role  = "pod"
+        field = "spec.nodeName=" + sys.env("HOSTNAME")
+      }
+    }
+
+    // --- Relabel: enrich with namespace, pod, container labels ---
+    discovery.relabel "pod_logs" {
+      targets = discovery.kubernetes.pods.targets
+
+      rule {
+        source_labels = ["__meta_kubernetes_namespace"]
+        target_label  = "namespace"
+      }
+      rule {
+        source_labels = ["__meta_kubernetes_pod_name"]
+        target_label  = "pod"
+      }
+      rule {
+        source_labels = ["__meta_kubernetes_pod_container_name"]
+        target_label  = "container"
+      }
+      rule {
+        source_labels = ["__meta_kubernetes_pod_node_name"]
+        target_label  = "node"
+      }
+      rule {
+        source_labels = ["__meta_kubernetes_namespace", "__meta_kubernetes_pod_name"]
+        separator     = "/"
+        target_label  = "job"
+      }
+      // Drop pause containers
+      rule {
+        source_labels = ["container"]
+        regex         = ""
+        action        = "drop"
+      }
+    }
+
+    // --- Tail log files from /var/log/pods ---
+    loki.source.kubernetes "pods" {
+      targets    = discovery.relabel.pod_logs.output
+      forward_to = [loki.process.pipeline.receiver]
+    }
+
+    // --- Pipeline: add static labels + timestamp ---
+    loki.process "pipeline" {
+      stage.static_labels {
+        values = {
+          cluster = "k3s-homelab",
+        }
+      }
+
+      // Drop long lines (>64KB) to protect Loki
+      stage.drop {
+        longer_than = "64KB"
+        drop_counter_reason = "line_too_long"
+      }
+
+      forward_to = [loki.write.default.receiver]
+    }
+
+    // --- Ship to Loki ---
+    loki.write "default" {
+      endpoint {
+        url = "http://loki.logging.svc.cluster.local:3100/loki/api/v1/push"
+      }
+    }
+
+---
+# ==========================================================================
+# DAEMONSET: alloy → mọi node
+# ==========================================================================
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: alloy
+  labels:
+    app: alloy
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  selector:
+    matchLabels:
+      app: alloy
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app: alloy
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      serviceAccountName: alloy
+      terminationGracePeriodSeconds: 10
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: alloy
+          image: {{ .Values.alloy.image }}
+          args:
+            - run
+            - /etc/alloy/config.alloy
+            - --storage.path=/tmp/alloy
+            - --server.http.listen-addr=0.0.0.0:12345
+            - --stability.level=generally-available
+            - --cluster.enabled=false
+            - --disable-reporting
+          env:
+            - name: HOSTNAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          ports:
+            - containerPort: 12345
+              name: http
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: 12345
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /-/ready
+              port: 12345
+            initialDelaySeconds: 15
+            periodSeconds: 15
+          resources:
+            requests:
+              memory: {{ .Values.alloy.resources.requests.memory }}
+              cpu: {{ .Values.alloy.resources.requests.cpu }}
+            limits:
+              memory: {{ .Values.alloy.resources.limits.memory }}
+              cpu: {{ .Values.alloy.resources.limits.cpu }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/alloy
+            - name: varlog
+              mountPath: /var/log
+              readOnly: true
+            - name: varlibdockercontainers
+              mountPath: /var/lib/docker/containers
+              readOnly: true
+            - name: runlogjournal
+              mountPath: /run/log/journal
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp/alloy
+      volumes:
+        - name: config
+          configMap:
+            name: alloy-config
+        - name: varlog
+          hostPath:
+            path: /var/log
+        - name: varlibdockercontainers
+          hostPath:
+            path: /var/lib/docker/containers
+        - name: runlogjournal
+          hostPath:
+            path: /run/log/journal
+        - name: tmp
+          emptyDir: {}
+
+
