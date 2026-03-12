@@ -1,5 +1,5 @@
-# IS405.Q23 — Dữ liệu lớn (Hadoop + Spark)
-> K3s namespace: `bigdata`  |  Quản lý cluster: xem `k3s.md`
+# Dữ liệu lớn (Hadoop + Spark)
+> K3s namespace: `bigdata`  |  Quản lý cluster: xem `README.md`
 
 ---
 
@@ -33,7 +33,7 @@ bigdata/
     └── spark-worker.yaml     StatefulSet (workers)
 ```
 
-- `workers.replicas` mặc định 1, scale: `kubectl scale statefulset hadoop-datanode -n bigdata --replicas=2` (scale các worker khác tương tự)
+- `workers.replicas` mặc định 2, scale: `kubectl scale statefulset hadoop-datanode -n bigdata --replicas=1` (scale các worker khác tương tự)
 - `dfs.replication` tự động = `workers.replicas`
 - Hard anti-affinity: cấm master, 1 pod/node
 - hostPort cho WebUI → truy cập qua Tailscale IP
@@ -60,12 +60,12 @@ kubectl delete ns bigdata
 
 | Service | URL |
 |---|---|
-| NameNode | http://<master-ip>:9870 |
-| ResourceManager | http://<master-ip>:8088 |
-| Spark Master | http://<master-ip>:8080 |
-| DataNode | http://<worker-ip-1>:9864 \| http://<worker-ip-2>:9864 |
-| NodeManager | http://<worker-ip-1>:8042 \| http://<worker-ip-2>:8042 |
-| Spark Worker | http://<worker-ip-1>:8081 \| http://<worker-ip-2>:8081 |
+| NameNode | http://[master-ip]:9870 |
+| ResourceManager | http://[master-ip]:8088 |
+| Spark Master | http://[master-ip]:8080 |
+| DataNode | http://[worker-ip-1]:9864 \| http://[worker-ip-2]:9864 |
+| NodeManager | http://[worker-ip-1]:8042 \| http://[worker-ip-2]:8042 |
+| Spark Worker | http://[worker-ip-1]:8081 \| http://[worker-ip-2]:8081 |
 
 ---
 

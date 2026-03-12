@@ -1,5 +1,5 @@
 # Cloudflare Tunnel — Expose K3s ra Internet
-> K3s namespace: `cloudflared`  |  Quản lý cluster: xem `k3s.md`
+> K3s namespace: `cloudflared`  |  Quản lý cluster: xem `README.md`
 
 ---
 
@@ -7,7 +7,7 @@
 
 | Subdomain | Service nội bộ | URL public |
 |---|---|---|
-| `grafana` | `mon-grafana.monitoring:80` | https://grafana.<your-domain> |
+| `grafana` | `mon-grafana.monitoring:80` | https://grafana.[your-domain] |
 
 > Thêm service mới: Cloudflare Dashboard → Tunnels → `k3s` → **Public Hostname** → Add
 
@@ -70,7 +70,7 @@ Internet → Cloudflare Edge (SSL) → Tunnel → cloudflared pod → K8s Servic
 | Type | `HTTP` |
 | URL | `mon-kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090` |
 
-→ Truy cập: https://prometheus.<your-domain>
+→ Truy cập: https://prometheus.[your-domain]
 
 ---
 

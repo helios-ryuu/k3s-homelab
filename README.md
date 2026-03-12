@@ -1,4 +1,4 @@
-# K3s Cluster — Tài liệu tổng hợp
+# K3S Homelab - K8s cluster cho các dịch vụ nội bộ
 
 > **5 nodes** qua Tailscale mesh VPN — 3 master (HA embedded etcd) + 2 worker  
 > Quản lý: `mng.sh` · Kiểm tra: `ck.sh` · Health check: `bigdata-check.sh` `ddb-check.sh` `ls-check.sh` `mon-check.sh`
@@ -22,7 +22,7 @@
 ■ <node-4> [worker]                 ── mssql-db-0
 ■ <node-5> [worker]               ── oracle-db-1, mssql-db-2, bigdata workers
 ```
-```
+
 
 ### Cấu hình Labels (Bắt buộc)
 

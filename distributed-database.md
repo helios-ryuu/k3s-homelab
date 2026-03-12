@@ -1,5 +1,5 @@
-# IS211.Q22 — Cơ sở dữ liệu phân tán (Oracle + MSSQL)
-> K3s namespaces: `oracle`, `mssql`  |  Quản lý cluster: xem `k3s.md`
+# Cơ sở dữ liệu phân tán (Oracle + MSSQL)
+> K3s namespaces: `oracle`, `mssql`  |  Quản lý cluster: xem `README.md`
 
 ---
 

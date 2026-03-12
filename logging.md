@@ -1,5 +1,5 @@
 # Logging — Loki + Grafana Alloy
-> K3s namespace: `logging`  |  Quản lý cluster: xem `k3s.md`
+> K3s namespace: `logging`  |  Quản lý cluster: xem `README.md`
 
 ---
 

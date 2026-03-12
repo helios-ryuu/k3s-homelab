@@ -78,9 +78,9 @@ EXPORT:
 EXAMPLES:
   ck.sh                     # Full check
   ck.sh sys                 # Chỉ xem RAM/CPU/disk
-  ck.sh node sinister       # Describe node sinister
+  ck.sh node nameofnode     # Describe node nameofnode
   ck.sh pod                 # Pods layout
-  ck.sh pod loki-0          # Describe pod loki-0
+  ck.sh pod nameofpod       # Describe pod nameofpod
   ck.sh export -c           # Export compact
 EOF
 }

@@ -1,5 +1,5 @@
 # LocalStack Pro — AWS Services giả lập
-> K3s namespace: `localstack`  |  Node: `<your-localstack-node>` |  Quản lý cluster: xem `k3s.md`
+> K3s namespace: `localstack`  |  Node: `<your-localstack-node>` |  Quản lý cluster: xem `README.md`
 
 ---
 

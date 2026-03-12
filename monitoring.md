@@ -1,5 +1,5 @@
 # Monitoring — Prometheus + Grafana
-> K3s namespace: `monitoring`  |  Logging: xem `logging.md`  |  Quản lý cluster: xem `k3s.md`
+> K3s namespace: `monitoring`  |  Logging: xem `logging.md`  |  Quản lý cluster: xem `README.md`
 
 ---
 
@@ -18,9 +18,9 @@ kubectl label node <node-name> node-role.kubernetes.io/monitoring=true
 
 | Service | URL | Credentials |
 |---|---|---|
-| **Grafana** | http://<node-ip>:30300 | admin / `Grafana@2026` |
-| **Prometheus** | http://<node-ip>:30090 | — |
-| **Loki** | http://<node-ip>:30100 | — (xem `logging.md`) |
+| **Grafana** | http://[node-ip]:30300 | admin / `Grafana@2026` |
+| **Prometheus** | http://[node-ip]:30090 | — |
+| **Loki** | http://[node-ip]:30100 | — (xem `logging.md`) |
 
 ---
 
