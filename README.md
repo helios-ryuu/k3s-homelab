@@ -10,9 +10,9 @@
 | Node | Role | OS (Ví dụ) | Tailscale IP | Workloads |
 |------|------|----|-------------|-----------|
 | `<node-1>` | master | Ubuntu | `<ip-1>` | monitoring, logging, bigdata masters, localstack, headlamp |
-| `<node-2>` | master | Ubuntu | `<ip-2>` | cloudflared |
+| `<node-2>` | master | Ubuntu | `<ip-2>` | cloudflared, **sure-stack** |
 | `<node-3>` | master | Fedora | `<ip-3>` | oracle-db-0, mssql-db-1, bigdata workers |
-| `<node-4>` | worker | Ubuntu | `<ip-4>` | mssql-db-0, **sure-stack** · **có thể offline bất kỳ lúc nào** |
+| `<node-4>` | worker | Ubuntu | `<ip-4>` | mssql-db-0 · **có thể offline bất kỳ lúc nào** |
 | `<node-5>` | worker | Ubuntu (WSL2) | `<ip-5>` | oracle-db-1, mssql-db-2, bigdata workers · **có thể offline bất kỳ lúc nào** |
 
 ```
