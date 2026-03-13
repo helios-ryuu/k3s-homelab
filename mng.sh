@@ -1,14 +1,14 @@
 #!/bin/bash
 # =================================================================
-# mng.sh — Quản lý toàn bộ Helm charts trên K3s
+# mng.sh — Quản lý toàn bộ Helm charts + manifests trên K3s
 # =================================================================
 # Sử dụng:
-#   bash ./mng.sh deploy   [bigdata|oracle|mssql|localstack|logging|monitoring|cloudflared|all]
-#   bash ./mng.sh delete   [bigdata|oracle|mssql|localstack|logging|monitoring|cloudflared|all]
-#   bash ./mng.sh redeploy [bigdata|oracle|mssql|localstack|logging|monitoring|cloudflared|all]
+#   bash ./mng.sh deploy   [bigdata|oracle|mssql|localstack|logging|monitoring|cloudflared|sure|all]
+#   bash ./mng.sh delete   [bigdata|oracle|mssql|localstack|logging|monitoring|cloudflared|sure|all]
+#   bash ./mng.sh redeploy [bigdata|oracle|mssql|localstack|logging|monitoring|cloudflared|sure|all]
 #   bash ./mng.sh scale    [bigdata|oracle|mssql] [1|2]
 #   bash ./mng.sh status
-#   bash ./mng.sh logs     [bigdata|oracle|mssql|localstack|logging|monitoring|cloudflared|alloy]
+#   bash ./mng.sh logs     [bigdata|oracle|mssql|localstack|logging|monitoring|cloudflared|sure|alloy]
 #   bash ./mng.sh health
 #   bash ./mng.sh nuke     ← Xóa TOÀN BỘ (PVC + namespace)
 # =================================================================
@@ -290,6 +290,55 @@ deploy_cloudflared() {
     wait_for_ready cloudflared
 }
 
+deploy_sure() {
+    info "Deploy Sure (Web + Worker + Postgres + Redis) → namespace: sure"
+
+    # Pre-check: namespace + secret phải tồn tại
+    if ! kubectl get ns sure &>/dev/null; then
+        warn "Namespace 'sure' chưa tồn tại, đang tạo..."
+        kubectl create namespace sure
+    fi
+    if ! kubectl get secret infra-secrets -n sure &>/dev/null; then
+        err "Secret 'infra-secrets' chưa tồn tại trong namespace 'sure'."
+        echo -e "      ${CYAN}Tạo secret trước:${NC}"
+        echo "        kubectl create secret generic infra-secrets \\"
+        echo "          --from-literal=sure-secret-key-base='<key>' \\"
+        echo "          --from-literal=sure-postgres-password='<pass>' \\"
+        echo "          -n sure"
+        return 1
+    fi
+
+    # Pre-check: node có label app-host=sure phải Ready
+    local target_node
+    target_node=$(kubectl get nodes -l app-host=sure -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+    if [ -z "$target_node" ]; then
+        err "Không tìm thấy node nào có label 'app-host=sure'."
+        echo -e "      ${CYAN}Gán label: kubectl label node <node-name> app-host=sure${NC}"
+        return 1
+    fi
+
+    local node_status
+    node_status=$(kubectl get node "$target_node" --no-headers 2>/dev/null | awk '{print $2}')
+    if [ "$node_status" != "Ready" ]; then
+        warn "Node $target_node không Ready (status: ${node_status:-NotFound})"
+        warn "Sure pin trên $target_node — pods sẽ Pending cho đến khi node online"
+        read -p "      Tiếp tục? (y/N): " confirm
+        if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
+            warn "Hủy deploy Sure."
+            return 1
+        fi
+    else
+        ok "Node $target_node: Ready"
+    fi
+
+    kubectl apply -f "$K3S_DIR/sure/sure-stack.yaml"
+    wait_for_ready sure
+
+    local sure_ip
+    sure_ip=$(kubectl get node "$target_node" -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null || echo "<node-ip>")
+    ok "Sure Web: http://${sure_ip}:30300"
+}
+
 deploy_headlamp() {
     info "Deploy Headlamp (K8s Dashboard) → namespace: kube-system"
     if release_exists headlamp kube-system; then
@@ -394,6 +443,12 @@ delete_cloudflared() {
     info "Force xóa Cloudflare Tunnel..."
     helm uninstall cfd -n cloudflared 2>/dev/null
     force_cleanup_ns cloudflared
+}
+
+delete_sure() {
+    info "Force xóa Sure..."
+    kubectl delete -f "$K3S_DIR/sure/sure-stack.yaml" $FORCE 2>/dev/null
+    force_cleanup_ns sure
 }
 
 delete_headlamp() {
@@ -513,9 +568,11 @@ show_logs() {
         alloy)       kubectl logs -f -n logging -l app=alloy --tail=100 --max-log-requests=10 ;;
         monitoring)  kubectl logs -f -n monitoring -l app.kubernetes.io/name=grafana --tail=100 ;;
         cloudflared) kubectl logs -f -n cloudflared -l app=cloudflared --tail=100 ;;
+        sure)        kubectl logs -f -n sure -l app=sure-web --tail=100 ;;
+        sure-worker) kubectl logs -f -n sure -l app=sure-worker --tail=100 ;;
         *)
             err "Target không hợp lệ cho logs: $target"
-            echo "    Targets: bigdata, oracle, mssql, localstack, logging, alloy, monitoring, cloudflared"
+            echo "    Targets: bigdata, oracle, mssql, localstack, logging, alloy, monitoring, cloudflared, sure, sure-worker"
             exit 1
             ;;
     esac
@@ -626,8 +683,8 @@ check_health() {
     echo ""
 
     # --- Fault tolerance summary ---
-    info "Fault Tolerance (oracle, mssql, bigdata)"
-    for ns in oracle mssql bigdata; do
+    info "Fault Tolerance (oracle, mssql, bigdata, sure)"
+    for ns in oracle mssql bigdata sure; do
         local total running pending
         total=$(kubectl get pods -n "$ns" --no-headers 2>/dev/null | wc -l)
         running=$(kubectl get pods -n "$ns" --no-headers 2>/dev/null | grep -c "Running")
@@ -659,6 +716,7 @@ case "$ACTION" in
             monitoring)  deploy_monitoring ;;
             cloudflared) deploy_cloudflared ;;
             headlamp)    deploy_headlamp ;;
+            sure)        deploy_sure ;;
             all)
                 # Logging trước monitoring (Grafana cần Loki data source)
                 deploy_logging
@@ -670,6 +728,7 @@ case "$ACTION" in
                 deploy_mssql
                 deploy_localstack
                 deploy_cloudflared
+                deploy_sure
                 ;;
             *) err "Target không hợp lệ: $TARGET" && exit 1 ;;
         esac
@@ -685,9 +744,11 @@ case "$ACTION" in
             monitoring)  delete_monitoring ;;
             cloudflared) delete_cloudflared ;;
             headlamp)    delete_headlamp ;;
+            sure)        delete_sure ;;
             all)
                 delete_cloudflared
                 delete_headlamp
+                delete_sure
                 delete_bigdata
                 delete_oracle
                 delete_mssql
@@ -709,14 +770,15 @@ case "$ACTION" in
             monitoring)  delete_monitoring;  sleep 5; deploy_monitoring ;;
             cloudflared) delete_cloudflared; sleep 5; deploy_cloudflared ;;
             headlamp)    delete_headlamp;    sleep 5; deploy_headlamp ;;
+            sure)        delete_sure;        sleep 5; deploy_sure ;;
             all)
-                delete_cloudflared; delete_bigdata; delete_oracle; delete_mssql
+                delete_cloudflared; delete_sure; delete_bigdata; delete_oracle; delete_mssql
                 delete_localstack; delete_monitoring; delete_logging
                 sleep 5
                 deploy_logging; deploy_monitoring
                 deploy_bigdata; sleep 30
                 deploy_oracle; deploy_mssql; deploy_localstack
-                deploy_cloudflared
+                deploy_cloudflared; deploy_sure
                 ;;
             *) err "Target không hợp lệ: $TARGET" && exit 1 ;;
         esac
@@ -738,7 +800,7 @@ case "$ACTION" in
     logs)
         if [ "$TARGET" = "all" ]; then
             err "Cần chỉ định target cụ thể cho logs"
-            echo "    Cú pháp: $0 logs [bigdata|oracle|mssql|localstack|logging|alloy|monitoring|cloudflared]"
+            echo "    Cú pháp: $0 logs [bigdata|oracle|mssql|localstack|logging|alloy|monitoring|cloudflared|sure|sure-worker]"
             exit 1
         fi
         show_logs "$TARGET"
@@ -754,6 +816,7 @@ case "$ACTION" in
         if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
             delete_cloudflared
             delete_headlamp
+            delete_sure
             delete_bigdata
             delete_oracle
             delete_mssql
@@ -770,7 +833,7 @@ case "$ACTION" in
     *)
         echo -e "${YELLOW}==================================================================="
         echo -e "  K3s Helm Manager"
-        echo -e "  BigData · Oracle · MSSQL · Logging · Monitoring · Cloudflared · Headlamp"
+        echo -e "  BigData · Oracle · MSSQL · Logging · Monitoring · Cloudflared · Headlamp · Sure"
         echo -e "===================================================================${NC}"
         echo ""
         echo -e "Cú pháp: ${CYAN}$0 <action> [target] [replicas]${NC}"
@@ -785,16 +848,18 @@ case "$ACTION" in
         echo -e "  ${CYAN}health${NC}                              Health check + fault tolerance"
         echo -e "  ${RED}nuke${NC}                                XÓA TẤT CẢ + PVC"
         echo ""
-        echo "Targets: bigdata, oracle, mssql, localstack, logging, monitoring, cloudflared, headlamp, all"
-        echo "         (logs cũng hỗ trợ: alloy)"
+        echo "Targets: bigdata, oracle, mssql, localstack, logging, monitoring, cloudflared, headlamp, sure, all"
+        echo "         (logs cũng hỗ trợ: alloy, sure-worker)"
         echo ""
         echo "Ví dụ:"
         echo "  $0 deploy logging          # Deploy Loki + Alloy"
         echo "  $0 deploy monitoring       # Prometheus + Grafana"
+        echo "  $0 deploy sure             # Deploy Sure (Web + Worker + DB + Redis)"
         echo "  $0 deploy all              # Deploy toàn bộ stack"
         echo "  $0 scale bigdata 2         # Scale 2 workers (tự khôi phục masters)"
         echo "  $0 scale bigdata 0         # Tắt toàn bộ bigdata (masters + workers)"
         echo "  $0 logs alloy              # Tail Alloy logs (all nodes)"
+        echo "  $0 logs sure               # Tail Sure web logs"
         echo "  $0 health                  # Check endpoints + fault tolerance"
         echo "  $0 redeploy logging        # Xóa sạch + deploy lại"
         echo "  $0 nuke                    # Xóa sạch mọi thứ"
