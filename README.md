@@ -17,9 +17,9 @@
 
 ```
 ■ <node-1> [master]     ── monitoring, logging, bigdata masters, localstack, headlamp
-■ <node-2> [master]  ── cloudflared
+■ <node-2> [master]  ── cloudflared, sure-stack (web, worker, pg, redis)
 ■ <node-3> [master]                 ── oracle-db-0, mssql-db-1, bigdata workers
-■ <node-4> [worker]                 ── mssql-db-0, sure-stack (web, worker, pg, redis)
+■ <node-4> [worker]                 ── mssql-db-0
 ■ <node-5> [worker]               ── oracle-db-1, mssql-db-2, bigdata workers
 ```
 
