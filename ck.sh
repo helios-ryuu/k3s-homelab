@@ -40,26 +40,43 @@ strip_colors() {
     sed -r 's/\x1B\[[0-9;]*[mK]//g'
 }
 
+# ======================== TIMING ========================
+section_timed() {
+    local start=$(date +%s%N)
+    "$@"
+    local ms=$(( ($(date +%s%N) - start) / 1000000 ))
+    echo -e "  ${CYAN}(${ms}ms)${NC}"
+}
+
 # ======================== CACHE ========================
 _cache_loaded=false
 load_cache() {
     [ "$_cache_loaded" = true ] && return
-    
+
     RAW_NODES_JSON=$(kubectl get nodes -o json 2>/dev/null)
     RAW_PODS_JSON=$(kubectl get pods -A -o json 2>/dev/null)
     RAW_PVC_JSON=$(kubectl get pvc -A -o json 2>/dev/null)
     RAW_WORKLOADS_JSON=$(kubectl get deploy,sts,ds -A -o json 2>/dev/null)
     RAW_SVC_JSON=$(kubectl get svc -A -o json 2>/dev/null)
     RAW_SECRETS_JSON=$(kubectl get secrets -A -o json 2>/dev/null)
-    RAW_HPA_JSON=$(kubectl get hpa -A -o json 2>/dev/null) # Đã bổ sung biến lấy data HPA
+    RAW_HPA_JSON=$(kubectl get hpa -A -o json 2>/dev/null)
 
-    declare -gA TS_IPS
+    # Validate API response
+    if [ -z "$RAW_NODES_JSON" ] || ! echo "$RAW_NODES_JSON" | jq -e '.items' >/dev/null 2>&1; then
+        echo -e "${RED}✖ K3s API không phản hồi hoặc dữ liệu rỗng. Kiểm tra: kubectl cluster-info${NC}"
+        exit 1
+    fi
+
+    # Build Tailscale IP maps (both IP→IP and hostname→IP)
+    declare -gA TS_IPS TS_HOST_IPS
     if command -v tailscale >/dev/null 2>&1; then
         while IFS= read -r line; do
             ts_ip=$(echo "$line" | awk '{print $1}')
+            ts_host=$(echo "$line" | awk '{print $2}')
             [ -z "$ts_ip" ] && continue
             TS_IPS["$ts_ip"]="$ts_ip"
-        done < <(tailscale status 2>/dev/null | awk 'NF>=2{print $1}')
+            TS_HOST_IPS["$ts_host"]="$ts_ip"
+        done < <(tailscale status 2>/dev/null | awk 'NF>=2{print $1, $2}')
     fi
 
     SORTED_NODES=$(echo "$RAW_NODES_JSON" | jq -r '
@@ -90,6 +107,40 @@ load_cache() {
         [$node, $ns, $name, $ready, $status, $restarts, $age] | @tsv
     ' 2>/dev/null | sort -k1,1 -k2,2 -k3,3)
 
+    # Pre-compute PVC→node mapping
+    declare -gA PVC_TO_NODE
+    while IFS=$'\t' read -r pnode pns ppvc; do
+        [ -n "$ppvc" ] && PVC_TO_NODE["${pns}/${ppvc}"]="$pnode"
+    done < <(echo "$RAW_PODS_JSON" | jq -r '
+        .items[] |
+        .spec.nodeName as $node |
+        (.spec.volumes[]? | select(.persistentVolumeClaim != null) | .persistentVolumeClaim.claimName) as $pvc |
+        .metadata.namespace as $ns |
+        [$node, $ns, $pvc] | @tsv
+    ' 2>/dev/null | sort -u)
+
+    # Parallelize ping
+    declare -gA PING_CACHE
+    for node in $SORTED_NODES; do
+        ip=$(get_ts_ip "$node")
+        if [ "$node" = "$(hostname)" ]; then
+            PING_CACHE["$node"]="localhost"
+        elif [ "$ip" != "N/A" ]; then
+            ( lat=$(ping -c 1 -W 1 "$ip" 2>/dev/null | grep 'time=' | sed -E 's/.*time=([0-9.]+) ms.*/\1/')
+              echo "${lat:-timeout}" > "/tmp/ck_ping_${node}" ) &
+        else
+            PING_CACHE["$node"]="N/A"
+        fi
+    done
+    wait
+    # Collect results from temp files
+    for node in $SORTED_NODES; do
+        if [ -z "${PING_CACHE[$node]}" ]; then
+            PING_CACHE["$node"]=$(cat "/tmp/ck_ping_${node}" 2>/dev/null || echo "timeout")
+        fi
+        rm -f "/tmp/ck_ping_${node}"
+    done
+
     _cache_loaded=true
 }
 
@@ -101,11 +152,11 @@ get_ts_ip() {
             echo "$ip"; return
         fi
     done
-    
-    if command -v tailscale >/dev/null 2>&1; then
-        local ts_ip=$(tailscale status 2>/dev/null | grep -i "$node" | awk '{print $1}' | head -1)
-        [ -n "$ts_ip" ] && echo "$ts_ip" && return
-    fi
+
+    # Fallback: use hostname→IP map (no extra tailscale status call)
+    local ts_ip="${TS_HOST_IPS[$node]}"
+    [ -n "$ts_ip" ] && echo "$ts_ip" && return
+
     echo "N/A"
 }
 
@@ -116,7 +167,7 @@ section_sys() {
     printf "${CYAN}%-12s${NC} %s\n" "Kernel:" "$(uname -r)"
     printf "${CYAN}%-12s${NC} %s\n" "Uptime:" "$(uptime -p)"
     uptime | awk -F'load average:' '{ printf "'"${CYAN}"'%-12s'"${NC}"' %s (1m / 5m / 15m)\n", "Load avg:", $2 }'
-    
+
     free -m | awk 'NR==2{
         used=$3; total=$2; pct=used*100/total;
         bar=""; for(i=0;i<20;i++) bar=bar (i<pct/5 ? "█" : "░");
@@ -138,9 +189,9 @@ section_node() {
     echo -e "\n${BLUE}--- [2/6] TOPOLOGY & K3S NODES ---${NC}"
     for node in $SORTED_NODES; do
         ip=$(get_ts_ip "$node")
-        
+
         node_info=$(echo "$RAW_NODES_JSON" | jq -r --arg n "$node" '
-            .items[] | select(.metadata.name==$n) | 
+            .items[] | select(.metadata.name==$n) |
             (if .metadata.labels["node-role.kubernetes.io/control-plane"] != null then "master" else "worker" end) as $role |
             (.status.conditions[] | select(.type=="Ready") | .status) as $ready |
             .status.nodeInfo.kubeletVersion as $ver |
@@ -159,17 +210,8 @@ section_node() {
             role_col="${ORANGE}${role_raw}${NC}"
         fi
 
-        latency="N/A"
-        if [ "$node" == "$(hostname)" ]; then
-            latency="localhost"
-        elif [ "$ip" != "N/A" ]; then
-            lat_val=$(ping -c 1 -W 1 "$ip" 2>/dev/null | grep 'time=' | sed -E 's/.*time=([0-9.]+) ms.*/\1/')
-            if [ -n "$lat_val" ]; then
-                latency="${lat_val}ms"
-            else
-                latency="timeout"
-            fi
-        fi
+        latency="${PING_CACHE[$node]:-N/A}"
+        [ "$latency" != "localhost" ] && [ "$latency" != "timeout" ] && [ "$latency" != "N/A" ] && latency="${latency}ms"
 
         lat_col=$(echo "$latency" | awk '{
             if ($1 == "localhost") print "'"${CYAN}"'" $1 "'"${NC}"'";
@@ -184,17 +226,15 @@ section_node() {
 
         echo -e "${CYAN}■ $node${NC} [${status_col} | ${role_col} | ${ver_raw} | IP: $ip | Ping: $lat_col]"
 
-        # Đã cập nhật: Hiện custom labels mỗi dòng 1 label
+        # Condensed labels on single line
         NODE_LABELS=$(echo "$RAW_NODES_JSON" | jq -r --arg n "$node" '
             .items[] | select(.metadata.name==$n) | .metadata.labels | to_entries[] |
             select(.key | test("^(kubernetes\\.io|node\\.kubernetes\\.io|beta\\.kubernetes\\.io|k3s\\.io)") | not) |
             "\(.key)=\(.value)"
         ' 2>/dev/null)
         if [ -n "$NODE_LABELS" ]; then
-            echo -e "  ${PURPLE}Labels:${NC}"
-            echo "$NODE_LABELS" | while read -r lbl; do
-                echo -e "    ${PURPLE}- $lbl${NC}"
-            done
+            local labels_inline=$(echo "$NODE_LABELS" | paste -sd ", " -)
+            echo -e "  ${PURPLE}Labels: $labels_inline${NC}"
         fi
 
         NODE_NSS=$(echo "$ALL_PODS" | awk -v n="$node" '$1==n {print $2}' | sort -u)
@@ -219,7 +259,7 @@ section_node() {
     for node in $SORTED_NODES; do
         echo -e "  ${YELLOW}>> $node${NC}"
         NODE_PODS=$(echo "$ALL_PODS" | awk -v n="$node" '$1==n {print $2"\t"$3"\t"$4"\t"$5"\t"$6"\t"$7}')
-        
+
         if [ -z "$NODE_PODS" ]; then
             echo -e "     ${CYAN}(Không có pod)${NC}"
         else
@@ -230,6 +270,26 @@ section_node() {
             NR==1{print "     '"${YELLOW}"'" $0 "'"${NC}"'"}
             NR>1{
                 line=$0;
+
+                # 1) Color ready fraction FIRST (before ANSI codes break spacing)
+                if (match(line, /[0-9]+\/[0-9]+/)) {
+                    frac=substr(line, RSTART, RLENGTH);
+                    split(frac, r, "/");
+                    if (r[1]+0 == r[2]+0 && r[1]+0 > 0) sub(frac, "'"${GREEN}"'" frac "'"${NC}"'", line);
+                    else if (r[1]+0 == 0) sub(frac, "'"${RED}"'" frac "'"${NC}"'", line);
+                    else sub(frac, "'"${YELLOW}"'" frac "'"${NC}"'", line);
+                }
+
+                # 2) Color restart count (field 5) — before status coloring injects ANSI codes
+                n=split(line, fields, /  +/);
+                for (i=1; i<=n; i++) {
+                    if (fields[i]+0 > 0 && fields[i] ~ /^[1-9][0-9]*$/) {
+                        sub(" " fields[i] " ", " '"${ORANGE}"'" fields[i] "'"${NC}"' ", line);
+                        break;
+                    }
+                }
+
+                # 3) Color status LAST
                 if (line ~ /CrashLoopBackOff/) sub("CrashLoopBackOff", "'"${RED}"'CrashLoopBackOff'"${NC}"'", line);
                 else if (line ~ /ImagePullBackOff/) sub("ImagePullBackOff", "'"${RED}"'ImagePullBackOff'"${NC}"'", line);
                 else if (line ~ /ErrImagePull/) sub("ErrImagePull", "'"${RED}"'ErrImagePull'"${NC}"'", line);
@@ -239,18 +299,7 @@ section_node() {
                 else if (line ~ /Pending/) sub("Pending", "'"${YELLOW}"'Pending'"${NC}"'", line);
                 else if (line ~ /Succeeded/) sub("Succeeded", "'"${BLUE}"'Succeeded'"${NC}"'", line);
                 else if (line ~ /Running/) sub("Running", "'"${GREEN}"'Running'"${NC}"'", line);
-                
-                if (match(line, / [1-9][0-9]* +[0-9]+[smhd]/)) {
-                    gsub(/ [1-9][0-9]* +/, "'"${ORANGE}"'&'"${NC}"'", line);
-                }
 
-                if (match(line, /[0-9]+\/[0-9]+/)) {
-                    frac=substr(line, RSTART, RLENGTH);
-                    split(frac, r, "/");
-                    if (r[1]+0 == r[2]+0 && r[1]+0 > 0) sub(frac, "'"${GREEN}"'" frac "'"${NC}"'", line);
-                    else if (r[1]+0 == 0) sub(frac, "'"${RED}"'" frac "'"${NC}"'", line);
-                    else sub(frac, "'"${YELLOW}"'" frac "'"${NC}"'", line);
-                }
                 print "     " line;
             }'
         fi
@@ -272,12 +321,11 @@ section_secrets() {
 
     for ns in $ns_list; do
         echo -e "  ${YELLOW}>> $ns${NC}"
-        # Đã cập nhật: Xuất theo dạng TSV để tạo bảng
         local sec_data=$(echo "$RAW_SECRETS_JSON" | jq -r --arg ns "$ns" '
             .items[] | select(.metadata.namespace==$ns and .type != "kubernetes.io/service-account-token") |
             "\(.metadata.name)\t\(.type)\t\((.data // {}) | keys | join(", "))"
         ' 2>/dev/null)
-        
+
         if [ -n "$sec_data" ]; then
             (
                 echo -e "${YELLOW}NAME\tTYPE\tKEYS${NC}"
@@ -292,13 +340,6 @@ section_secrets() {
 section_pvc() {
     load_cache
     echo -e "\n${BLUE}--- [3/6] STORAGE (PVC) ---${NC}"
-    PVC_NODE_MAP=$(echo "$RAW_PODS_JSON" | jq -r '
-        .items[] |
-        .spec.nodeName as $node |
-        (.spec.volumes[]? | select(.persistentVolumeClaim != null) | .persistentVolumeClaim.claimName) as $pvc |
-        .metadata.namespace as $ns |
-        [$node, $ns, $pvc] | @tsv
-    ' 2>/dev/null | sort -u)
 
     ALL_PVC=$(echo "$RAW_PVC_JSON" | jq -r '
         .items[] | [.metadata.namespace, .metadata.name, (.status.capacity.storage // "N/A")] | @tsv
@@ -309,8 +350,9 @@ section_pvc() {
         NODE_PVC=""
         while IFS=$'\t' read -r pvc_ns pvc_name pvc_size; do
             [ -z "$pvc_name" ] && continue
-            match=$(echo "$PVC_NODE_MAP" | awk -v n="$node" -v ns="$pvc_ns" -v pvc="$pvc_name" '$1==n && $2==ns && $3==pvc')
-            if [ -n "$match" ]; then
+            # Use pre-computed PVC→node map for O(1) lookup
+            local node_for_pvc="${PVC_TO_NODE["${pvc_ns}/${pvc_name}"]}"
+            if [ "$node_for_pvc" = "$node" ]; then
                 NODE_PVC+="${pvc_ns}\t${pvc_name}\t${pvc_size}\n"
             fi
         done <<< "$ALL_PVC"
@@ -330,7 +372,7 @@ section_res() {
     load_cache
     local ns_filter="$1"
     echo -e "\n${BLUE}--- [4/6] DEPLOYED RESOURCES ---${NC}"
-    
+
     local jq_ns_filter=""
     if [ -n "$ns_filter" ]; then
         jq_ns_filter=" and (.metadata.namespace | startswith(\"$ns_filter\"))"
@@ -365,7 +407,7 @@ section_res() {
             $5 = color ready "'"${NC}"'";
             $6 = color upto "'"${NC}"'";
             $7 = color avail "'"${NC}"'";
-            
+
             if ($2 == "deploy") $2 = "'"${CYAN}"'" $2 "'"${NC}"'";
             else if ($2 == "sts") $2 = "'"${PURPLE}"'" $2 "'"${NC}"'";
             else if ($2 == "ds") $2 = "'"${ORANGE}"'" $2 "'"${NC}"'";
@@ -399,20 +441,19 @@ section_res() {
             current=$5;
             split(current, arr, "/");
             curr_val=arr[1]; des_val=arr[2];
-            
-            # Tô màu chỉ số hiện tại: Nếu Replicas đang cao bất thường (chạm mốc MAX) thì báo vàng/đỏ
+
             color="'"${GREEN}"'";
             split($4, max_arr, " -> ");
             max_val=max_arr[2];
-            
+
             if (curr_val >= max_val && max_val > 0) color="'"${RED}"'";
             else if (curr_val >= max_val * 0.8) color="'"${ORANGE}"'";
-            
+
             $5 = color current "'"${NC}"'";
             $3 = "'"${PURPLE}"'" $3 "'"${NC}"'";
             print $0
         }')
-        
+
         (
             echo -e "${YELLOW}NS\tHPA NAME\tTARGET\tMIN->MAX\tCURRENT/DESIRED${NC}"
             echo -e "$hpas_colored"
@@ -479,7 +520,7 @@ section_img() {
                 fi
                 printf "%s\t-\t%s\t|\t%s GB\t|\t%b\t%b\n" "$sort_key" "$short_img" "$size_gb" "$tag" "$info"
             done | sort -k1,1 | cut -f2-)
-            
+
             echo "$output" | column -t -s $'\t' | sed 's/^/   /'
         fi
     done
@@ -488,16 +529,16 @@ section_img() {
 section_helm() {
     if ! command -v helm >/dev/null 2>&1; then return; fi
     echo -e "\n${BLUE}--- [6/6] HELM RELEASES ---${NC}"
-    
+
     helm list -A -o json 2>/dev/null | jq -r '
         ["NAMESPACE", "NAME", "REVISION", "UPDATED", "STATUS", "CHART", "APP_VERSION"],
         (.[] | [
-            .namespace, 
-            .name, 
-            .revision, 
-            (.updated | split(".") | .[0] | sub("T"; " ")), 
-            .status, 
-            .chart, 
+            .namespace,
+            .name,
+            .revision,
+            (.updated | split(".") | .[0] | sub("T"; " ")),
+            .status,
+            .chart,
             .app_version
         ]) | @tsv
     ' | column -t -s $'\t' | awk '
@@ -515,13 +556,13 @@ section_helm() {
 generate_full_report() {
     echo "K3s Cluster Check — $(date '+%Y-%m-%d %H:%M:%S')"
     echo "================================================="
-    section_sys
-    section_node
-    section_secrets
-    section_pvc
-    section_res
-    section_img
-    section_helm
+    section_timed section_sys
+    section_timed section_node
+    section_timed section_secrets
+    section_timed section_pvc
+    section_timed section_res
+    section_timed section_img
+    section_timed section_helm
     echo -e "\n>>> Kiểm tra hoàn tất!"
 }
 
@@ -549,7 +590,23 @@ do_export() {
 check_dependencies
 
 case "${1:-}" in
-    -h|--help) echo "Sử dụng: ./ck.sh [sys|node|pod|pvc|res|img|helm|secrets|export]" ;;
+    -h|--help)
+        echo "K3s Cluster Check"
+        echo ""
+        echo "Cú pháp: ./ck.sh [section] [args]"
+        echo ""
+        echo "Sections:"
+        echo "  sys       Hệ thống & tải (CPU, RAM, Disk)"
+        echo "  node      Topology, nodes, pod layout"
+        echo "  pvc       Persistent Volume Claims"
+        echo "  res [ns]  Workloads, HPA, Services (filter by namespace)"
+        echo "  img       Container images & usage"
+        echo "  helm      Helm releases"
+        echo "  secrets   Secrets (theo namespace)"
+        echo "  export    Xuất report ra file (./ck/)"
+        echo ""
+        echo "Không có argument = chạy tất cả sections"
+        ;;
     sys) section_sys ;;
     node|pod) check_k3s_connection; section_node ;;
     pvc) check_k3s_connection; section_pvc ;;

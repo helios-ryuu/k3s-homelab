@@ -1,0 +1,124 @@
+{{- /*
+  oracle-config.yaml — ConfigMap: tnsnames.ora + startup script
+
+  LAB 2 — Database Link:
+  - tnsnames.ora: tự động sinh entries ORACLE_DB_0, ORACLE_DB_1, ...
+    cho mỗi replica. Dùng cho:
+    • Lab 2 Bài 1: tạo database link (connected/fixed user link)
+    • Lab 2 Bài 2: ĐHQG truy vấn ĐH CNTT qua db link
+    • Lab 2 Bài 3: chi nhánh ngân hàng kết nối hai chiều
+  - 01_update_tns.sh: inject tnsnames.ora vào Oracle home khi startup
+    → tự động có thể tnsping ORACLE_DB_0 / ORACLE_DB_1
+*/ -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: oracle-network-config
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+data:
+  # tnsnames.ora: mỗi replica = 1 entry (ORACLE_DB_0, ORACLE_DB_1, ...)
+  # HOST = headless service DNS: oracle-db-X.oracle-svc.<namespace>.svc.cluster.local
+  tnsnames.ora: |
+    {{- range $i := until (int .Values.replicas) }}
+    ORACLE_DB_{{ $i }} = (DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=oracle-db-{{ $i }}.oracle-svc.{{ $.Release.Namespace }}.svc.cluster.local)(PORT=1521))(CONNECT_DATA=(SERVER=DEDICATED)(SERVICE_NAME={{ $.Values.oracle.pdbName }})))
+    {{- end }}
+
+    # PDBs cho từng pod (Lab 1 và Lab 2)
+    LAB11PDB_0 = (DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=oracle-db-0.oracle-svc.oracle.svc.cluster.local)(PORT=1521))(CONNECT_DATA=(SERVER=DEDICATED)(SERVICE_NAME=LAB11PDB)))
+    LAB11PDB_1 = (DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=oracle-db-1.oracle-svc.oracle.svc.cluster.local)(PORT=1521))(CONNECT_DATA=(SERVER=DEDICATED)(SERVICE_NAME=LAB11PDB)))
+    LAB12PDB_0 = (DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=oracle-db-0.oracle-svc.oracle.svc.cluster.local)(PORT=1521))(CONNECT_DATA=(SERVER=DEDICATED)(SERVICE_NAME=LAB12PDB)))
+    LAB12PDB_1 = (DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=oracle-db-1.oracle-svc.oracle.svc.cluster.local)(PORT=1521))(CONNECT_DATA=(SERVER=DEDICATED)(SERVICE_NAME=LAB12PDB)))
+    LAB22PDB_0 = (DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=oracle-db-0.oracle-svc.oracle.svc.cluster.local)(PORT=1521))(CONNECT_DATA=(SERVER=DEDICATED)(SERVICE_NAME=LAB22PDB)))
+    LAB22PDB_1 = (DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=oracle-db-1.oracle-svc.oracle.svc.cluster.local)(PORT=1521))(CONNECT_DATA=(SERVER=DEDICATED)(SERVICE_NAME=LAB22PDB)))
+    LAB23PDB_0 = (DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=oracle-db-0.oracle-svc.oracle.svc.cluster.local)(PORT=1521))(CONNECT_DATA=(SERVER=DEDICATED)(SERVICE_NAME=LAB23PDB)))
+    LAB23PDB_1 = (DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=oracle-db-1.oracle-svc.oracle.svc.cluster.local)(PORT=1521))(CONNECT_DATA=(SERVER=DEDICATED)(SERVICE_NAME=LAB23PDB)))
+
+  # Startup script: chạy khi Oracle container khởi động
+  # Inject tnsnames.ora từ ConfigMap vào Oracle home để sqlplus/tnsping hoạt động
+  01_update_tns.sh: |
+    #!/bin/bash
+    TNS_FILE=/opt/oracle/product/19c/dbhome_1/network/admin/tnsnames.ora
+    echo "--- Bat dau cap nhat TNSNAMES.ORA tu ConfigMap ---"
+    # Remove existing managed entries before re-appending
+    sed -i '/^ORACLE_DB_/d' "$TNS_FILE"
+    sed -i '/^LAB/d' "$TNS_FILE"
+    cat /tmp/custom_tns/tnsnames.ora >> "$TNS_FILE"
+    echo "--- Cap nhat thanh cong! ---"
+
+  # Script khoi tao 4 PDBs khi container start: LAB11PDB, LAB12PDB, LAB22PDB, LAB23PDB
+  02_init_pdbs.sh: |
+    #!/bin/bash
+    # Tu dong khoi tao PDBs khi container start
+    POD_INDEX=${HOSTNAME##*-}
+    
+    # Mapping PDBs: moi pod co tat ca 4 PDBs
+    PDB_LIST=("LAB11PDB" "LAB12PDB" "LAB22PDB" "LAB23PDB")
+
+    echo "--- Bat dau quy trinh kiem tra & khoi tao 4 PDBs: ${PDB_LIST[*]} ---"
+
+    for PDB_NAME in "${PDB_LIST[@]}"; do
+      echo "Dang xu ly PDB: $PDB_NAME"
+      
+      # Dam bao thu muc data ton tai (FIX cho FILE_NAME_CONVERT)
+      mkdir -p "/opt/oracle/oradata/ORCLCDB/$PDB_NAME/"
+      chown -R oracle:oinstall "/opt/oracle/oradata/ORCLCDB/$PDB_NAME/" 2>/dev/null || true
+      
+      # Su dung sqlplus de thuc thi lenh SQL (dam bao database da san sang)
+      sqlplus -s / as sysdba <<EOF
+        SET FEEDBACK OFF;
+        SET SERVEROUTPUT ON;
+        WHENEVER SQLERROR CONTINUE;
+
+        DECLARE
+          v_cnt NUMBER;
+        BEGIN
+          -- 1. Kiem tra ton tai
+          SELECT count(*) INTO v_cnt FROM v\$pdbs WHERE name = UPPER('$PDB_NAME');
+          
+          IF v_cnt = 0 THEN
+            DBMS_OUTPUT.PUT_LINE('PDB $PDB_NAME chua ton tai. Dang tao tu SEED...');
+            
+            -- Thiet lap duong dan mac dinh
+            EXECUTE IMMEDIATE 'ALTER SYSTEM SET DB_CREATE_FILE_DEST = ''/opt/oracle/oradata''';
+            
+            -- Tao PDB
+            EXECUTE IMMEDIATE 'CREATE PLUGGABLE DATABASE $PDB_NAME ' ||
+                              'ADMIN USER LAB_ADMIN IDENTIFIED BY "$ORACLE_PWD" ' ||
+                              'ROLES = (DBA) ' ||
+                              'FILE_NAME_CONVERT = (''/opt/oracle/oradata/ORCLCDB/pdbseed/'', ''/opt/oracle/oradata/ORCLCDB/$PDB_NAME/'')';
+            DBMS_OUTPUT.PUT_LINE('Da tao thanh cong PDB $PDB_NAME.');
+          ELSE
+            DBMS_OUTPUT.PUT_LINE('PDB $PDB_NAME da ton tai.');
+          END IF;
+
+          -- Open PDB (ORA-65019 = already open → safe to ignore on restart)
+          BEGIN
+            EXECUTE IMMEDIATE 'ALTER PLUGGABLE DATABASE $PDB_NAME OPEN';
+          EXCEPTION
+            WHEN OTHERS THEN
+              IF SQLCODE = -65019 THEN
+                DBMS_OUTPUT.PUT_LINE('PDB $PDB_NAME da mo san.');
+              ELSE RAISE;
+              END IF;
+          END;
+          EXECUTE IMMEDIATE 'ALTER PLUGGABLE DATABASE $PDB_NAME SAVE STATE';
+          
+          -- 3. Khoi tao Tablespace USERS
+          EXECUTE IMMEDIATE 'ALTER SESSION SET CONTAINER = $PDB_NAME';
+          BEGIN
+            EXECUTE IMMEDIATE 'CREATE TABLESPACE USERS DATAFILE SIZE 100M AUTOEXTEND ON NEXT 10M MAXSIZE 2G';
+            DBMS_OUTPUT.PUT_LINE('Da khoi tao Tablespace USERS cho $PDB_NAME.');
+          EXCEPTION
+            WHEN OTHERS THEN
+              IF SQLCODE = -1543 THEN
+                DBMS_OUTPUT.PUT_LINE('Tablespace USERS da co san.');
+              ELSE
+                DBMS_OUTPUT.PUT_LINE('Loi TableSpace: ' || SQLERRM);
+              END IF;
+          END;
+        END;
+        /
+    EOF
+    done
+    echo "--- Hoan tat khoi tao PDBs! ---"

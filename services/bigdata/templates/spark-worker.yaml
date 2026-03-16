@@ -1,0 +1,128 @@
+{{- /*
+  spark-worker.yaml — Spark Worker: Headless Service + StatefulSet
+  ─────────────────────────────────────────────────────────────────
+  Role: Executes Spark tasks (executors) on worker nodes
+  replicas: {{ .Values.workers.replicas }} (one per worker node)
+
+  Port:
+    8081 — Worker WebUI (per-worker executor + job status)
+
+  Design notes:
+    - enableServiceLinks: false — same reason as Spark Master (PORT collision)
+    - SPARK_LOCAL_HOSTNAME = Pod IP — see spark-master.yaml note
+    - podAntiAffinity (required): no 2 workers on the same node
+    - Offline worker → pod Pending (normal); job capacity reduced proportionally
+*/ -}}
+
+# Headless Service: enables StatefulSet DNS (spark-worker-N.spark-worker)
+apiVersion: v1
+kind: Service
+metadata:
+  name: spark-worker
+  labels:
+    app.kubernetes.io/name: bigdata
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  clusterIP: None
+  ports:
+    - port: 8081
+      name: worker-webui
+  selector:
+    app: spark-worker
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: spark-worker
+  labels:
+    app.kubernetes.io/name: bigdata
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  podManagementPolicy: Parallel
+  replicas: {{ .Values.workers.replicas }}
+  serviceName: spark-worker
+  selector:
+    matchLabels:
+      app: spark-worker
+  template:
+    metadata:
+      labels:
+        app: spark-worker
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      enableServiceLinks: false
+      {{- with .Values.worker.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      tolerations:
+        - key: node.kubernetes.io/unreachable
+          operator: Exists
+          effect: NoExecute
+        - key: node.kubernetes.io/not-ready
+          operator: Exists
+          effect: NoExecute
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: app
+                    operator: In
+                    values:
+                      - spark-worker
+              topologyKey: kubernetes.io/hostname
+      containers:
+        - name: spark-worker
+          image: {{ .Values.spark.worker.image }}
+          command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.worker.Worker"]
+          args:
+            - "spark://spark-master:7077"
+            - "--webui-port"
+            - "8081"
+            - "-c"
+            - {{ .Values.spark.worker.cores | quote }}
+            - "-m"
+            - {{ .Values.spark.worker.memory | quote }}
+          env:
+            - name: MY_POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            # Advertise Pod IP so driver can connect back cross-node
+            - name: SPARK_LOCAL_HOSTNAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+          ports:
+            - containerPort: 8081
+              hostPort: 8081
+              name: worker-webui
+          resources:
+            requests:
+              memory: {{ .Values.spark.worker.resources.requests.memory | quote }}
+              cpu: {{ .Values.spark.worker.resources.requests.cpu | quote }}
+            limits:
+              memory: {{ .Values.spark.worker.resources.limits.memory | quote }}
+              cpu: {{ .Values.spark.worker.resources.limits.cpu | quote }}
+          volumeMounts:
+            - name: hadoop-config
+              mountPath: /opt/hadoop/conf/core-site.xml
+              subPath: core-site.xml
+            - name: hadoop-config
+              mountPath: /opt/hadoop/conf/hdfs-site.xml
+              subPath: hdfs-site.xml
+            - name: spark-config
+              mountPath: /opt/spark/conf/spark-env.sh
+              subPath: spark-env.sh
+            - name: spark-config
+              mountPath: /opt/spark/conf/spark-defaults.conf
+              subPath: spark-defaults.conf
+      volumes:
+        - name: hadoop-config
+          configMap:
+            name: hadoop-config
+        - name: spark-config
+          configMap:
+            name: spark-config

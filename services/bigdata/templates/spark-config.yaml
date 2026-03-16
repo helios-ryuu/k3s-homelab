@@ -1,0 +1,67 @@
+{{- /*
+  spark-config.yaml — ConfigMap for Spark runtime config
+  ─────────────────────────────────────────────────────────
+  Two files sourced at Spark Master/Worker startup:
+    spark-env.sh        — runtime environment variables
+    spark-defaults.conf — default properties for spark-submit / pyspark
+
+  Key design notes:
+    - SPARK_LOCAL_IP / SPARK_LOCAL_HOSTNAME: Spark must advertise its Pod IP,
+      not the pod hostname. Pod hostnames (e.g. spark-master-xxx) are not
+      resolvable from pods on other nodes → executors crash with
+      UnknownHostException. MY_POD_IP is injected via Downward API.
+    - HADOOP_CONF_DIR: lets Spark find core-site.xml + hdfs-site.xml
+      (mounted from hadoop-config ConfigMap) for HDFS access.
+    - spark.jars.packages: GraphFrames auto-downloaded on first pyspark/
+      spark-submit call. Cached in /tmp/.ivy2.
+*/ -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: spark-config
+  labels:
+    app.kubernetes.io/name: bigdata
+    app.kubernetes.io/instance: {{ .Release.Name }}
+data:
+  spark-env.sh: |
+    #!/usr/bin/env bash
+
+    # Bind to Pod IP; advertise Pod IP so cross-node executors can connect
+    export SPARK_LOCAL_IP=$MY_POD_IP
+    export SPARK_LOCAL_HOSTNAME=${SPARK_LOCAL_HOSTNAME:-$MY_POD_IP}
+
+    # Python 3 for PySpark driver and executors
+    export PYSPARK_PYTHON=/usr/bin/python3
+    export PYSPARK_DRIVER_PYTHON=/usr/bin/python3
+
+    # Hadoop config dir (core-site.xml + hdfs-site.xml mounted here)
+    export HADOOP_CONF_DIR=/opt/hadoop/conf
+    export SPARK_DIST_CLASSPATH=/opt/hadoop/conf
+
+    # Spark temp directories
+    export SPARK_WORKER_DIR=/tmp/spark-worker
+    export SPARK_LOCAL_DIRS=/tmp/spark-local
+
+    # HDFS user (permissions disabled in hdfs-site.xml, root keeps it simple)
+    export HADOOP_USER_NAME=root
+
+  spark-defaults.conf: |
+    # Spark Standalone master RPC endpoint
+    spark.master                          spark://spark-master:7077
+
+    # HDFS NameNode for reading/writing data
+    spark.hadoop.fs.defaultFS             hdfs://hadoop-namenode:9000
+
+    # GraphFrames (Lab 7) — downloaded automatically on first use
+    spark.jars.packages                   {{ .Values.spark.graphframes.package }}
+    spark.jars.ivy                        /tmp/.ivy2
+
+    # Spark SQL warehouse on HDFS (Lab 4)
+    spark.sql.warehouse.dir               hdfs://hadoop-namenode:9000/spark-warehouse
+
+    # Default driver + executor memory
+    spark.driver.memory                   1g
+    spark.executor.memory                 1g
+
+    # HDFS user
+    spark.hadoop.HADOOP_USER_NAME         root

@@ -1,327 +1,317 @@
-# K3S Homelab - K8s cluster cho các dịch vụ nội bộ
+# K3S Homelab — Distributed Systems Education Cluster
 
-> **5 nodes** qua Tailscale mesh VPN — 3 master (HA embedded etcd) + 2 worker  
-> Quản lý: `mng.sh` · Kiểm tra: `ck.sh` · Health check: `bigdata-check.sh` `ddb-check.sh` `ls-check.sh` `mon-check.sh` `sure.md`
+> **5 nodes** via Tailscale mesh VPN — 3 master (HA embedded etcd) + 2 worker
+> Management: `k3s.sh` · Diagnostics: `ck.sh` · Secrets: `init-sec.sh`
 
 ---
 
 ## 1. Topology
 
-| Node | Role | OS (Ví dụ) | Tailscale IP | Workloads |
+| Node | Role | OS | Tailscale IP | Workloads |
 |------|------|----|-------------|-----------|
 | `<node-1>` | master | Ubuntu | `<ip-1>` | monitoring, logging, bigdata masters, localstack, headlamp |
 | `<node-2>` | master | Ubuntu | `<ip-2>` | cloudflared, **sure-stack** |
 | `<node-3>` | master | Fedora | `<ip-3>` | oracle-db-0, mssql-db-1, bigdata workers |
-| `<node-4>` | worker | Ubuntu | `<ip-4>` | mssql-db-0 · **có thể offline bất kỳ lúc nào** |
-| `<node-5>` | worker | Ubuntu (WSL2) | `<ip-5>` | oracle-db-1, mssql-db-2, bigdata workers · **có thể offline bất kỳ lúc nào** |
+| `<node-4>` | worker | Ubuntu | `<ip-4>` | mssql-db-0 · **may go offline** |
+| `<node-5>` | worker | Ubuntu (WSL2) | `<ip-5>` | oracle-db-1, mssql-db-2, bigdata workers · **may go offline** |
 
-```
-■ <node-1> [master]     ── monitoring, logging, bigdata masters, localstack, headlamp
-■ <node-2> [master]  ── cloudflared, sure-stack (web, worker, pg, redis)
-■ <node-3> [master]                 ── oracle-db-0, mssql-db-1, bigdata workers
-■ <node-4> [worker]                 ── mssql-db-0
-■ <node-5> [worker]               ── oracle-db-1, mssql-db-2, bigdata workers
-```
+### Node Labels (Required)
 
-
-### Cấu hình Labels (Bắt buộc)
-
-Các workloads (Database, Monitoring, Big Data) được phân bổ qua `nodeSelector`. Để Pods có thể boot up thành công, bạn phải gán các label theo role sau:
+Workloads use `nodeSelector` for placement. Labels must be assigned before deploying:
 
 ```bash
-# Node cấu hình làm Management/Master (Monitoring, Logging, v.v...)
-kubectl label node <node-1> node-role.kubernetes.io/monitoring="true"
-kubectl label node <node-1> node-role.kubernetes.io/logging="true"
-kubectl label node <node-1> node-role.kubernetes.io/localstack="true"
-kubectl label node <node-1> node-role.kubernetes.io/bigdata-master="true"
+# Monitoring & Logging
+kubectl label node <node> node-role.kubernetes.io/monitoring=true
+kubectl label node <node> node-role.kubernetes.io/logging=true
 
-# Node chạy Database & Big Data Workers (Ví dụ <node-3>, <node-4>, <node-5>)
-kubectl label node <node-3> node-role.kubernetes.io/database="true"
-kubectl label node <node-3> node-role.kubernetes.io/bigdata-worker="true"
+# BigData
+kubectl label node <node> node-role.kubernetes.io/bigdata-master=true
+kubectl label node <node> node-role.kubernetes.io/bigdata-worker=true
 
-# Node chạy Sure App (Ví dụ <node-4>)
-kubectl label node <node-4> app-host=sure
+# Databases
+kubectl label node <node> node-role.kubernetes.io/database-oracle=true
+kubectl label node <node> node-role.kubernetes.io/database-mssql=true
+
+# Sure App
+kubectl label node <node> app-host=sure
 ```
 
 ---
 
-## 2. Quản lý Cluster (`mng.sh`)
+## 2. Cluster Management (`k3s.sh`)
 
 ```bash
-bash ./mng.sh deploy   [bigdata|oracle|mssql|localstack|logging|monitoring|cloudflared|headlamp|sure|all]
-bash ./mng.sh delete   [bigdata|oracle|mssql|localstack|logging|monitoring|cloudflared|headlamp|sure|all]
-bash ./mng.sh redeploy [bigdata|oracle|mssql|localstack|logging|monitoring|cloudflared|headlamp|sure|all]
-bash ./mng.sh scale    [bigdata|oracle|mssql] [0|1|2|3]
-bash ./mng.sh status
-bash ./mng.sh logs     [bigdata|oracle|mssql|localstack|logging|monitoring|cloudflared|sure|sure-worker|alloy]
-bash ./mng.sh health
-bash ./mng.sh nuke                             # ⚠ Xóa TẤT CẢ (PVC + namespace)
+./k3s.sh deploy   [target|all]   # Deploy (install or upgrade)
+./k3s.sh delete   [target|all]   # Force delete (pods, PVC, namespace)
+./k3s.sh redeploy [target|all]   # Delete + deploy clean
+./k3s.sh scale    <target> <N>   # Scale workers/replicas
+./k3s.sh logs     <target>       # Tail main pod logs
+./k3s.sh check    <target>       # Component health check
+./k3s.sh status                  # Cluster overview (nodes, helm, pods, PVC)
+./k3s.sh health                  # Global health check + fault tolerance
+./k3s.sh nuke                    # DELETE EVERYTHING including PVC
 ```
 
-| Hành động | Mô tả |
-|-----------|-------|
-| `deploy` | `helm install` (lần đầu) hoặc `helm upgrade` (đã tồn tại) |
-| `delete` | Force xóa toàn bộ (pods, PVC, CRDs, namespace) |
-| `redeploy` | `delete` + `deploy` lại sạch |
-| `scale N` | Đổi replicas (0 = tắt hết, giữ PVC) |
-| `nuke` | Xóa **tất cả** namespaces + PVC. Không hỏi lại. |
+**Targets:** `bigdata`, `oracle`, `mssql`, `localstack`, `logging`, `monitoring`, `cloudflared`, `headlamp`, `sure`
 
-### Hành vi khi node offline
+| Action | Description |
+|--------|-------------|
+| `deploy` | `helm install` (first time) or `helm upgrade` (existing) |
+| `delete` | Force delete everything (pods, PVC, CRDs, namespace) |
+| `redeploy` | `delete` + `deploy` clean |
+| `scale N` | Change replicas (0 = shutdown, PVC preserved) |
+| `check` | Per-component health check with detailed diagnostics |
 
-- Worker offline → pods trên node đó chuyển **Pending** (không reschedule vì anti-affinity cứng)
-- Scale về 0 → tất cả pods terminated, **PVC giữ nguyên**
-- Scale lên lại → pods tự tạo mới, mount PVC cũ
+### Per-Component Scripts
+
+Each component has its own script in `svc-scripts/` with the same interface plus component-specific commands:
+
+```bash
+./svc-scripts/bigdata.sh scale [0|1|2|3]    # Scale workers (workers before masters)
+./svc-scripts/bigdata.sh check              # 6-section BigData health check
+./svc-scripts/oracle.sh check               # 4-section Oracle health check
+./svc-scripts/mssql.sh check                # 4-section MSSQL health check
+./svc-scripts/monitoring.sh check           # 5-section monitoring stack check
+./svc-scripts/localstack.sh check           # 5-section LocalStack check (with smoke tests)
+./svc-scripts/sure.sh setup                 # Rails DB migrations
+./svc-scripts/sure.sh check                 # 4-section Sure health check
+./svc-scripts/headlamp.sh token             # Create permanent auth token
+```
+
+### Offline Node Behavior
+
+- Worker offline → pods go **Pending** (no reschedule due to hard anti-affinity)
+- Scale to 0 → all pods terminated, **PVC preserved**
+- Scale back up → pods recreate, mount existing PVC
 
 ---
 
-## 3. Kiểm tra Cluster (`ck.sh`)
+## 3. Cluster Diagnostics (`ck.sh`)
 
 ```bash
-ck.sh                       # Full check — tất cả 7 sections
-ck.sh sys                   # [1/7] Hệ thống & tải (RAM, CPU, disk, uptime)
-ck.sh node                  # [2/7] Nodes & Pods layout (gộp theo node)
-ck.sh secrets               # [3/7] Secrets (theo namespace, chỉ hiện tên)
-ck.sh pvc                   # [4/7] PVC / Storage (gộp theo node)
-ck.sh res                   # [5/7] Deployed resources (deploy, sts, ds, hpa, svc)
-ck.sh img                   # [6/7] Images & usage per node
-ck.sh helm                  # [7/7] Helm releases
+./ck.sh                    # Full check — all 7 sections
+./ck.sh sys                # [1/7] System & load (RAM, CPU, disk, uptime)
+./ck.sh node               # [2/7] Nodes & Pods layout (grouped by node)
+./ck.sh secrets            # [3/7] Secrets (by namespace, names only)
+./ck.sh pvc                # [4/7] PVC / Storage (grouped by node)
+./ck.sh res                # [5/7] Deployed resources (deploy, sts, ds, hpa, svc)
+./ck.sh img                # [6/7] Images & usage per node
+./ck.sh helm               # [7/7] Helm releases
 ```
 
 ### Detail mode
 
 ```bash
-ck.sh node <node-name>         # kubectl describe node <node-name>
-ck.sh pod loki-0            # kubectl describe pod (tự detect namespace)
-ck.sh pvc loki-data         # kubectl describe pvc (tự detect namespace)
-ck.sh res bigdata           # Resources chỉ namespace bigdata
+./ck.sh node <node-name>       # kubectl describe node
+./ck.sh pod loki-0             # kubectl describe pod (auto-detect namespace)
+./ck.sh pvc loki-data          # kubectl describe pvc (auto-detect namespace)
+./ck.sh res bigdata            # Resources for namespace bigdata only
 ```
 
 ### Export
 
 ```bash
-ck.sh export                # → ck/ck-HHmmss-ddMMyy.txt (full, có section headers)
-ck.sh export .              # Tương tự
-ck.sh export -c             # → ck/ck-HHmmss-ddMMyy-compact.txt (gộp pods/pvc, bỏ decoration, giữ 100% data)
+./ck.sh export                 # → ck/ck-HHmmss-ddMMyy.txt
+./ck.sh export -c              # → ck/ck-HHmmss-ddMMyy-compact.txt
 ```
-
-### Health check chuyên biệt
-
-| Script | Kiểm tra | Sections |
-|--------|----------|----------|
-| `bigdata-check.sh` | HDFS NameNode/DataNode, YARN RM/NM, Spark Master/Worker, cross-component, endpoints | 6 |
-| `ddb-check.sh` | Oracle listener/instance, MSSQL sqlcmd, cross-instance connectivity | 6 |
-| `ls-check.sh` | LocalStack pod, API health, services status, S3/SQS smoke test | 4 |
-| `mon-check.sh` | Prometheus targets, Grafana login, Loki push/query, Alloy DaemonSet, node-exporter | 5 |
 
 ---
 
 ## 4. Helm Charts
 
-| Release | Namespace | Chart | Mô tả | Doc |
-|---------|-----------|-------|-------|-----|
-| `bigd` | `bigdata` | local `bigdata/` | Hadoop 3.2.1 + Spark 3.5.8 | `big-data.md` |
-| `ora` | `oracle` | local `oracle/` | Oracle 19c × 2 instances | `distributed-database.md` |
-| `mssql` | `mssql` | local `mssql/` | MSSQL 2025 × 3 instances | `distributed-database.md` |
-| `localstack` | `localstack` | `localstack/localstack` | LocalStack Pro (AWS emulator) | `localstack.md` |
-| `log` | `logging` | local `logging/` | Loki + Grafana Alloy | `logging.md` |
-| `mon` | `monitoring` | `kube-prometheus-stack` | Prometheus + Grafana | `monitoring.md` |
-| `cfd` | `cloudflared` | local `cloudflared/` | Cloudflare Tunnel (2 replicas) | `cloudflared.md` |
-| `sure` | `sure` | local `sure/` | Finance Management App (Rails + PG + Redis) | `sure.md` |
-| `headlamp` | `kube-system` | `headlamp/headlamp` | K8s Dashboard UI | — |
+| Release | Namespace | Chart | Description | Guide |
+|---------|-----------|-------|-------------|-------|
+| `bigd` | `bigdata` | local `bigdata/` | Hadoop 3.2.1 + Spark 3.5.8 | [guides/bigdata.md](guides/bigdata.md) |
+| `ora` | `oracle` | local `oracle/` | Oracle 19c (2 instances) | [guides/distributed-database.md](guides/distributed-database.md) |
+| `mssql` | `mssql` | local `mssql/` | MSSQL 2025 (3 instances) | [guides/distributed-database.md](guides/distributed-database.md) |
+| `localstack` | `localstack` | `localstack/localstack` | LocalStack Pro (AWS emulator) | [guides/localstack.md](guides/localstack.md) |
+| `log` | `logging` | local `logging/` | Loki + Grafana Alloy | [guides/logging.md](guides/logging.md) |
+| `mon` | `monitoring` | `kube-prometheus-stack` | Prometheus + Grafana | [guides/monitoring.md](guides/monitoring.md) |
+| `cfd` | `cloudflared` | local `cloudflared/` | Cloudflare Tunnel (2 replicas) | [guides/cloudflared.md](guides/cloudflared.md) |
+| — | `sure` | raw manifests | Sure Finance App (Rails + PG + Redis) | [guides/sure.md](guides/sure.md) |
+| `headlamp` | `kube-system` | `headlamp/headlamp` | K8s Dashboard UI | [guides/headlamp.md](guides/headlamp.md) |
 
 ---
 
 ## 5. Secrets (`infra-secrets`)
 
-Sensitive values được lưu trong K8s Secret `infra-secrets` (mỗi namespace 1 bản).  
-YAML charts dùng `secretKeyRef` — **không hardcode** giá trị trong values.yaml.
+Sensitive values stored in K8s Secret `infra-secrets` (one per namespace).
+YAML charts use `secretKeyRef` — **never hardcode** values in `values.yaml`.
 
 ```bash
-# Tạo/update cho tất cả namespaces
-for ns in cloudflared localstack monitoring mssql oracle sure; do
-  kubectl create namespace "$ns" --dry-run=client -o yaml | kubectl apply -f -
-  kubectl create secret generic infra-secrets \
-    --from-literal=cloudflare-token='<CLOUDFLARE_TUNNEL_TOKEN>' \
-    --from-literal=localstack-token='<LOCALSTACK_AUTH_TOKEN>' \
-    --from-literal=grafana-admin-password='<GRAFANA_PASSWORD>' \
-    --from-literal=admin-user='admin' \
-    --from-literal=admin-password='<GRAFANA_PASSWORD>' \
-    --from-literal=mssql-password='<MSSQL_SA_PASSWORD>' \
-    --from-literal=oracle-password='<ORACLE_SYS_PASSWORD>' \
-    --from-literal=sure-secret-key-base='$(head -c 64 /dev/urandom | od -An -tx1 | tr -d " \n")' \
-    --from-literal=sure-postgres-password='<SURE_DB_PASSWORD>' \
-    -n "$ns" --dry-run=client -o yaml | kubectl apply -f -
-done
+# Initialize/update all secrets (reads from .env or uses defaults)
+./init-sec.sh
+
+# Initialize for a specific namespace only
+./init-sec.sh <namespace>
 ```
 
-| Key | Dùng bởi | Mô tả |
-|-----|----------|-------|
-| `cloudflare-token` | `cloudflared` | Tunnel token (Cloudflare Dashboard → Zero Trust → Tunnels) |
-| `localstack-token` | `localstack` | Pro license key (`LOCALSTACK_AUTH_TOKEN`) |
-| `grafana-admin-password` | `monitoring` | Grafana admin password (legacy key, giữ cho backward compat) |
-| `admin-user` | `monitoring` | Grafana admin username (`admin.existingSecret.userKey`) |
-| `admin-password` | `monitoring` | Grafana admin password (`admin.existingSecret.passwordKey`) |
-| `mssql-password` | `mssql` | SA password (`MSSQL_SA_PASSWORD`) |
-| `oracle-password` | `oracle` | SYS password (`ORACLE_PWD`) |
+| Key | Used by | Description |
+|-----|---------|-------------|
+| `cloudflare-token` | `cloudflared` | Tunnel token |
+| `localstack-token` | `localstack` | Pro license key |
+| `grafana-admin-password` | `monitoring` | Grafana admin password |
+| `admin-user` / `admin-password` | `monitoring` | Grafana auth (existingSecret) |
+| `mssql-password` | `mssql` | SA password |
+| `oracle-password` | `oracle` | SYS password |
 | `sure-secret-key-base` | `sure` | Rails Secret Key Base |
-| `sure-postgres-password` | `sure` | Postgres Password cho Sure App |
+| `sure-postgres-password` | `sure` | Postgres password |
 
 ```bash
-# Xem giá trị secret
+# View a secret value
 kubectl get secret infra-secrets -n <namespace> -o jsonpath='{.data.<key>}' | base64 -d
 ```
 
 ---
 
-## 6. Truy cập Services
+## 6. Service Access
 
-| Service | URL (Tailscale) | Port |
-|---------|----------------|------|
-| Grafana | `https://grafana.<your-domain>` · `http://<node-ip>:30300` | NodePort `30300` |
-| Prometheus | `http://<node-ip>:30090` | NodePort `30090` |
-| Headlamp | `https://headlamp.<your-domain>` | ClusterIP → Cloudflare Tunnel |
-| HDFS WebUI | `http://<node-ip>:9870` | hostPort |
-| YARN WebUI | `http://<node-ip>:8088` | hostPort |
-| Spark WebUI | `http://<node-ip>:30808` | NodePort `30808` |
-| Loki | `http://<node-ip>:30100` | NodePort `30100` |
-| Oracle | `<node-Tailscale-IP>:31521` | NodePort `31521` |
-| MSSQL | `<node-Tailscale-IP>:31433` | NodePort `31433` |
-| LocalStack | `http://<node-ip>:30566` | NodePort `30566` |
-| Sure App | `http://<node-ip>:30333` | NodePort `30333` |
-
-> Oracle/MSSQL: kết nối qua IP của **node đang chạy pod**
+| Service | URL | Port |
+|---------|-----|------|
+| Grafana | `https://grafana.<domain>` · `http://<ip>:30300` | NodePort 30300 |
+| Prometheus | `http://<ip>:30090` | NodePort 30090 |
+| Headlamp | `https://headlamp.<domain>` | ClusterIP → Tunnel |
+| HDFS WebUI | `http://<ip>:9870` | hostPort |
+| YARN WebUI | `http://<ip>:8088` | hostPort |
+| Spark WebUI | `http://<ip>:30808` | NodePort 30808 |
+| Loki | `http://<ip>:30100` | NodePort 30100 |
+| Oracle | `<ip>:31521` | NodePort 31521 |
+| MSSQL | `<ip>:31433` | NodePort 31433 |
+| LocalStack | `http://<ip>:30566` | NodePort 30566 |
+| Sure App | `http://<ip>:30333` | NodePort 30333 |
 
 ---
 
-## 7. Cài đặt K3s Node mới
+## 7. Adding a K3s Node
 
-### Yêu cầu
+### Prerequisites
 
-1. **Tailscale** đã cài và login cùng Tailnet:
-   ```bash
-   curl -fsSL https://tailscale.com/install.sh | sh
-   sudo tailscale up
-   ```
-2. Node mới ping được master: `ping <master-ip>`
-3. Port `6443` accessible qua Tailscale
+1. Tailscale installed and joined to the same tailnet
+2. New node can ping master: `ping <master-ip>`
+3. Port `6443` accessible via Tailscale
 
-### Lấy token
-
-Trên **master node đầu tiên** (`<node-1>`):
+### Get token
 
 ```bash
+# On the first master node
 sudo cat /var/lib/rancher/k3s/server/node-token
 ```
 
-### Thêm Master (server)
+### Add Master (server)
 
 ```bash
 curl -sfL https://get.k3s.io | \
     K3S_URL=https://<master-ip>:6443 \
     K3S_TOKEN=<TOKEN> \
     sh -s - server \
-    --node-ip=<TAILSCALE_IP_CỦA_NODE_MỚI> \
-    --advertise-address=<TAILSCALE_IP_CỦA_NODE_MỚI> \
+    --node-ip=<TAILSCALE_IP> \
+    --advertise-address=<TAILSCALE_IP> \
     --flannel-iface=tailscale0 \
     --write-kubeconfig-mode 644 \
-    --tls-san=<TAILSCALE_IP_CỦA_NODE_MỚI>
+    --tls-san=<TAILSCALE_IP>
 ```
 
-### Thêm Worker (agent)
+### Add Worker (agent)
 
 ```bash
 curl -sfL https://get.k3s.io | \
     K3S_URL=https://<master-ip>:6443 \
     K3S_TOKEN=<TOKEN> \
     sh -s - agent \
-    --node-ip=<TAILSCALE_IP_CỦA_NODE_MỚI> \
+    --node-ip=<TAILSCALE_IP> \
     --flannel-iface=tailscale0
 ```
 
-### Sau khi join
+### After joining
 
 ```bash
-kubectl get nodes                     # Xác nhận node đã join
-kubectl label node <tên> node-role.kubernetes.io/worker=worker   # Label nếu cần
+kubectl get nodes
+kubectl label node <name> node-role.kubernetes.io/worker=worker
 ```
 
 ---
 
-## 8. Migration: Chuyển sang HA (3 Master)
+## 8. HA Migration (Single Master → 3 Masters)
 
-> Áp dụng khi cluster đang chạy single-master và muốn chuyển sang HA embedded etcd.
-
-### Bước 1 — Bật cluster-init trên master hiện tại
+### Step 1 — Enable cluster-init on current master
 
 ```bash
-# SSH vào master hiện tại
 sudo systemctl stop k3s
 curl -sfL https://get.k3s.io | sh -s - server \
     --cluster-init \
     --node-ip=<master-ip> \
     --flannel-iface=tailscale0
-```
-
-Lấy token sau khi khởi động lại:
-
-```bash
 sudo cat /var/lib/rancher/k3s/server/node-token
 ```
 
-### Bước 2 — Join master #2 và #3
+### Step 2 — Join master #2 and #3
 
-Dùng lệnh **"Thêm Master"** ở mục 7 với token vừa lấy.
+Use the "Add Master" command from section 7.
 
-### Bước 3 — Chuyển worker thành master (nếu cần)
-
-```bash
-# SSH vào worker node
-/usr/local/bin/k3s-agent-uninstall.sh   # Gỡ agent
-# Rồi chạy lệnh "Thêm Master" ở mục 7
-```
-
-### Bước 4 — Kiểm tra
+### Step 3 — Convert worker to master (if needed)
 
 ```bash
-kubectl get nodes
-# Tất cả master: STATUS=Ready, ROLES=control-plane,master
+/usr/local/bin/k3s-agent-uninstall.sh
+# Then run "Add Master" command
 ```
 
-### Lưu ý HA
+### HA Notes
 
-- **Tối thiểu 3 master** cho HA (etcd Raft consensus cần đa số)
-- 1 master offline → cluster vẫn hoạt động (2/3 quorum)
-- 2 master offline → cluster **mất quorum**, read-only
-- Ping giữa masters nên < 100ms (etcd heartbeat timeout)
-- Worker node offline **không** ảnh hưởng control plane
+- **Minimum 3 masters** for HA (etcd Raft quorum)
+- 1 master offline → cluster operational (2/3 quorum)
+- 2 masters offline → **quorum lost**, read-only
+- Inter-master ping should be < 100ms
+- Worker offline does **not** affect control plane
 
 ---
 
-## 9. Cấu trúc thư mục
+## 9. Directory Structure
 
 ```
 k3s-homelab/
-├── mng.sh                  # Quản lý deploy/scale/delete/health
-├── ck.sh                   # Cluster check (7 sections + export)
-├── bigdata-check.sh        # Health check Hadoop + Spark
-├── ddb-check.sh            # Health check Oracle + MSSQL
-├── ls-check.sh             # Health check LocalStack
-├── mon-check.sh            # Health check Monitoring stack
-├── README.md               # ← Tài liệu này
-├── big-data.md             # Lab: BigData (Hadoop + Spark)
-├── distributed-database.md # Lab: CSDL Phân tán (Oracle + MSSQL)
-├── localstack.md           # Doc: LocalStack
-├── logging.md              # Doc: Logging
-├── monitoring.md           # Doc: Monitoring
-├── cloudflared.md          # Doc: Cloudflare Tunnel
-├── sure.md                 # Doc: Sure App
-├── bigdata/                # Helm chart: Hadoop 3.2.1 + Spark 3.5.8
+├── k3s.sh                  # Main dispatcher (deploy/scale/delete/health)
+├── ck.sh                   # Cluster diagnostics (7 sections + export)
+├── init-sec.sh             # Secret initialization (all namespaces)
+├── _lib.sh                 # Shared helpers (colors, kubectl wrappers, IP detection)
+├── README.md               # This file
+├── CLAUDE.md               # AI assistant instructions
+├── guides/                 # Service documentation
+│   ├── bigdata.md          # Hadoop + Spark guide
+│   ├── distributed-database.md  # Oracle + MSSQL guide
+│   ├── monitoring.md       # Prometheus + Grafana guide
+│   ├── logging.md          # Loki + Alloy guide
+│   ├── cloudflared.md      # Cloudflare Tunnel guide
+│   ├── localstack.md       # LocalStack Pro guide
+│   ├── sure.md             # Sure Finance App guide
+│   └── headlamp.md         # Headlamp K8s Dashboard guide
+├── svc-scripts/            # Component scripts
+│   ├── bigdata.sh          # BigData (deploy/scale/check)
+│   ├── oracle.sh           # Oracle (deploy/scale/check)
+│   ├── mssql.sh            # MSSQL (deploy/scale/check)
+│   ├── monitoring.sh       # Monitoring (deploy/check)
+│   ├── logging.sh          # Logging (deploy/logs)
+│   ├── localstack.sh       # LocalStack (deploy/check)
+│   ├── cfd.sh              # Cloudflare Tunnel (deploy)
+│   ├── sure.sh             # Sure (deploy/setup/check)
+│   └── headlamp.sh         # Headlamp (deploy/token)
+├── bigdata/                # Helm chart: Hadoop + Spark
 ├── oracle/                 # Helm chart: Oracle 19c
 ├── mssql/                  # Helm chart: MSSQL 2025
-├── localstack/             # Values: localstack/localstack chart
 ├── logging/                # Helm chart: Loki + Alloy
 ├── monitoring/             # Values: kube-prometheus-stack
 ├── cloudflared/            # Helm chart: Cloudflare Tunnel
-├── sure/                   # Manifests: Sure App stack
+├── localstack/             # Values: localstack/localstack
+├── sure/                   # Raw K8s manifests
 └── ck/                     # Export output (ck-*.txt)
+```
+
+---
+
+## Helm Repos (one-time setup)
+
+```bash
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+helm repo add localstack https://helm.localstack.cloud
+helm repo add headlamp https://headlamp-k8s.github.io/headlamp/
+helm repo update
 ```

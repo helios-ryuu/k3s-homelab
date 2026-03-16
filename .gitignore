@@ -2,3 +2,5 @@ ck/
 .idea/
 .env
 .vscode/
+.claude/
+CLAUDE.md

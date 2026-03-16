@@ -1,0 +1,205 @@
+{{- /*
+  mssql-db.yaml — Headless Service + NodePort Service + StatefulSet (with init sidecar)
+  replicas={{ .Values.replicas }}
+  # Pin vào database nodes, 1 pod/node
+
+  LAB 4 MAPPING:
+  - Headless Service DNS = endpoint cho Linked Server:
+    mssql-db-0.mssql-svc.mssql.svc.cluster.local (Node 1 = CN1 + Hội sở)
+    mssql-db-1.mssql-svc.mssql.svc.cluster.local (Node 2 = CN2)
+    mssql-db-2.mssql-svc.mssql.svc.cluster.local (Node 3 = CN3)
+  - NodePort 31433: kết nối từ SSMS/DataGrip qua Tailscale IP
+  - hostPort 1433: kết nối trực tiếp qua IP node
+  - Init sidecar: chạy setup.sql tạo database ban đầu (MSSQLDB)
+  - mssql-tools18: ODBC 18 (encryption-first), path /opt/mssql-tools18/bin
+    Dùng -No (TrustServerCertificate) cho self-signed cert trong cluster
+
+  FAULT TOLERANCE:
+  - Deploy ban đầu: 3 replicas, scale xuống 2 sau khi setup
+  - Node offline → pod Pending, các pod khác vẫn chạy
+  - PVC (local-path) giữ data khi restart
+  - Anti-affinity: mỗi node tối đa 1 MSSQL pod
+*/ -}}
+
+# ==========================================================================
+# HEADLESS SERVICE: mssql-svc (DNS nội bộ cho StatefulSet)
+# Lab 4: Linked Server endpoint giữa các chi nhánh
+#   mssql-db-0.mssql-svc.mssql.svc.cluster.local,1433
+#   mssql-db-1.mssql-svc.mssql.svc.cluster.local,1433
+# ==========================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: mssql-svc
+  labels:
+    app: mssql
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  clusterIP: None
+  selector:
+    app: mssql
+  ports:
+    - name: db-port
+      port: 1433
+
+---
+# ==========================================================================
+# NODEPORT SERVICE: Kết nối từ bên ngoài (SSMS, DataGrip)
+# Lab 4: Truy cập qua <Tailscale-IP>:{{ .Values.nodePort }}
+#   Node 1:   <node-1-ip>:{{ .Values.nodePort }}
+#   Node 2:   <node-2-ip>:{{ .Values.nodePort }}
+#   Node 3:   <node-3-ip>:{{ .Values.nodePort }}
+# ==========================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: mssql-nodeport
+  labels:
+    app: mssql
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  type: NodePort
+  selector:
+    app: mssql
+  ports:
+    - name: db-external
+      port: 1433
+      targetPort: 1433
+      nodePort: {{ .Values.nodePort }}
+
+---
+# ==========================================================================
+# STATEFULSET: mssql-db
+# replicas: {{ .Values.replicas }}
+# Lab 4: mssql-db-0 = CN1 + Hội sở, mssql-db-1 = CN2, mssql-db-2 = CN3
+# ==========================================================================
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mssql-db
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  podManagementPolicy: Parallel
+  serviceName: mssql-svc
+  replicas: {{ .Values.replicas }}
+  selector:
+    matchLabels:
+      app: mssql
+  template:
+    metadata:
+      labels:
+        app: mssql
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      # === LUẬT ĐIỀU PHỐI ===
+      # Tolerate master node taint (control-plane)
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+        - key: node.kubernetes.io/unreachable
+          operator: Exists
+          effect: NoExecute
+        - key: node.kubernetes.io/not-ready
+          operator: Exists
+          effect: NoExecute
+      {{- if .Values.nodeSelector }}
+      nodeSelector:
+{{ toYaml .Values.nodeSelector | indent 8 }}
+      {{- end }}
+      affinity:
+        # CẤM 2 MSSQL chung 1 node → mỗi node tối đa 1 pod
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: app
+                operator: In
+                values:
+                - mssql
+            topologyKey: kubernetes.io/hostname
+
+      terminationGracePeriodSeconds: 10
+
+      containers:
+      - name: mssql-engine
+        image: {{ .Values.mssql.image }}
+        command: ["/bin/bash", "-c", "taskset -c {{ .Values.mssql.tasksetCores }} /opt/mssql/bin/sqlservr"]
+        securityContext:
+          privileged: true
+          runAsUser: 0
+        ports:
+        - containerPort: 1433
+          # hostPort: kết nối trực tiếp qua IP node (Lab 4 Linked Server)
+          hostPort: 1433
+        env:
+        - name: ACCEPT_EULA
+          value: "Y"
+        - name: MSSQL_SA_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: infra-secrets
+              key: mssql-password
+        - name: MSSQL_PID
+          value: {{ .Values.mssql.pid | quote }}
+        - name: MSSQL_MEMORY_LIMIT_MB
+          value: {{ .Values.mssql.memoryLimitMB | quote }}
+        # Required for SQL Server Replication (Lab 4)
+        - name: MSSQL_AGENT_ENABLED
+          value: "true"
+        resources:
+          requests:
+            memory: {{ .Values.mssql.resources.requests.memory }}
+            cpu: {{ .Values.mssql.resources.requests.cpu | quote }}
+          limits:
+            memory: {{ .Values.mssql.resources.limits.memory }}
+            cpu: {{ .Values.mssql.resources.limits.cpu | quote }}
+        volumeMounts:
+        - name: mssql-data
+          mountPath: /var/opt/mssql
+        - name: init-script
+          mountPath: /usr/config
+
+      # Init sidecar: chờ SQL Server khởi động rồi chạy setup.sql
+      # Dùng mssql-tools18 (ODBC 18, encryption-first)
+      # -No: TrustServerCertificate (self-signed cert trong cluster)
+      - name: mssql-init
+        image: {{ .Values.mssql.initImage }}
+        command:
+        - /bin/bash
+        - -c
+        - |
+          echo "Waiting for SQL Server to start..."
+          until /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "${MSSQL_SA_PASSWORD}" -No -Q "SELECT 1" &>/dev/null; do
+            echo "SQL Server is unavailable - sleeping"
+            sleep 2
+          done
+          echo "SQL Server is up! Running setup script..."
+          /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "${MSSQL_SA_PASSWORD}" -No -d master -i /usr/config/setup.sql
+          echo "Initialization complete. Keeping container alive..."
+          tail -f /dev/null
+        env:
+        - name: MSSQL_SA_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: infra-secrets
+              key: mssql-password
+        volumeMounts:
+        - name: init-script
+          mountPath: /usr/config
+
+      volumes:
+      - name: init-script
+        configMap:
+          name: mssql-config
+
+  volumeClaimTemplates:
+  - metadata:
+      name: mssql-data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      storageClassName: local-path
+      resources:
+        requests:
+          storage: {{ .Values.mssql.storage }}

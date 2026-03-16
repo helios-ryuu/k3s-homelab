@@ -1,0 +1,121 @@
+{{- /*
+  hadoop-namenode.yaml — NameNode: Service + PVC + Deployment
+  ─────────────────────────────────────────────────────────────
+  Role: HDFS Master — manages filesystem metadata (fsimage + edit logs)
+  Runs on: management node (pinned via nodeSelector)
+
+  Ports:
+    9000 — HDFS IPC: DataNode registration, client reads/writes
+    9870 — WebUI: browse HDFS, view cluster health
+
+  Design:
+    - strategy: Recreate — only 1 NameNode, no rolling update needed
+    - local-path PVC stays on master node; nodeSelector ensures pod stays there
+    - bde2020 image auto-formats HDFS on first start if PVC is empty
+*/ -}}
+
+# Service: internal DNS "hadoop-namenode" for HDFS access
+apiVersion: v1
+kind: Service
+metadata:
+  name: hadoop-namenode
+  labels:
+    app.kubernetes.io/name: bigdata
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  ports:
+    - port: 9000
+      name: hdfs-ipc
+    - port: 9870
+      name: hdfs-webui
+  selector:
+    app: namenode
+
+---
+# PVC: NameNode metadata storage ({{ .Values.hadoop.namenode.storage }})
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: hadoop-namenode-pvc
+  labels:
+    app.kubernetes.io/name: bigdata
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: {{ .Values.hadoop.namenode.storage }}
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hadoop-namenode
+  labels:
+    app.kubernetes.io/name: bigdata
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: namenode
+  template:
+    metadata:
+      labels:
+        app: namenode
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+        - key: node.kubernetes.io/unreachable
+          operator: Exists
+          effect: NoExecute
+        - key: node.kubernetes.io/not-ready
+          operator: Exists
+          effect: NoExecute
+      {{- with .Values.management.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: namenode
+          image: {{ .Values.hadoop.namenode.image }}
+          env:
+            - name: CLUSTER_NAME
+              value: {{ .Values.hadoop.clusterName | quote }}
+            # bde2020 env → core-site.xml
+            - name: CORE_CONF_fs_defaultFS
+              value: "hdfs://hadoop-namenode:9000"
+            # bde2020 env → hdfs-site.xml
+            - name: HDFS_CONF_dfs_replication
+              value: {{ .Values.workers.replicas | quote }}
+            - name: HDFS_CONF_dfs_namenode_datanode_registration_ip___hostname___check
+              value: "false"
+            - name: HDFS_CONF_dfs_permissions_enabled
+              value: "false"
+          resources:
+            requests:
+              memory: {{ .Values.hadoop.namenode.resources.requests.memory | quote }}
+              cpu: {{ .Values.hadoop.namenode.resources.requests.cpu | quote }}
+            limits:
+              memory: {{ .Values.hadoop.namenode.resources.limits.memory | quote }}
+              cpu: {{ .Values.hadoop.namenode.resources.limits.cpu | quote }}
+          ports:
+            - containerPort: 9000
+              hostPort: 9000
+              name: hdfs-ipc
+            - containerPort: 9870
+              hostPort: 9870
+              name: hdfs-webui
+          volumeMounts:
+            - name: namenode-data
+              mountPath: /hadoop/dfs/name
+      volumes:
+        - name: namenode-data
+          persistentVolumeClaim:
+            claimName: hadoop-namenode-pvc

@@ -1,0 +1,119 @@
+# =================================================================
+# LocalStack Pro — AWS cloud emulator for development & learning
+# API (external): http://<master-ip>:30566
+# API (cluster):  http://localstack.localstack.svc.cluster.local:4566
+# Docs: https://docs.localstack.cloud/references/configuration/
+# =================================================================
+# Pre-deploy checklist:
+#   1. Auth token in infra-secrets  (key: localstack-token)
+#   2. Label node: kubectl label node <name> node-role.kubernetes.io/localstack=true
+#   3. DinD requires privileged pod — intentional for Lambda execution
+#   4. NodePort 30566 is pinned — stable across redeploys
+# =================================================================
+
+# --- IMAGE ---
+# Pin to a specific version (e.g. "3.8.0") for reproducibility.
+# "latest" + pullPolicy:Always always gets the newest Pro build.
+image:
+  repository: localstack/localstack-pro
+  tag: "latest"
+  pullPolicy: Always
+
+# --- DEPLOYMENT STRATEGY ---
+# Recreate is required: ReadWriteOnce PVC + DinD can't run two pods simultaneously.
+updateStrategy:
+  type: Recreate
+
+# --- ENVIRONMENT ---
+extraEnvVars:
+  - name: LOCALSTACK_AUTH_TOKEN
+    valueFrom:
+      secretKeyRef:
+        name: infra-secrets
+        key: localstack-token
+
+  # Services to emulate — lazily started on first request.
+  # Coverage reference: https://docs.localstack.cloud/references/coverage/
+  # Covers: storage, databases, messaging, compute, security, networking, analytics
+  - name: SERVICES
+    value: "s3,iam,sts,sqs,sns,dynamodb,lambda,apigateway,apigatewayv2,cloudwatch,logs,secretsmanager,ssm,kms,kinesis,stepfunctions,route53,ec2,rds,events,cloudformation,firehose,cognito-idp,acm,glue,athena"
+
+  # Persist all AWS resource state across pod restarts.
+  # Delete the PVC to do a full reset: kubectl delete pvc -n localstack --all
+  - name: PERSISTENCE
+    value: "1"
+
+  # Lambda executor: "docker" uses DinD sidecar for real container isolation.
+  # Required for Lambda layers, custom runtimes, and accurate emulation.
+  - name: LAMBDA_EXECUTOR
+    value: "docker"
+
+  # NOTE: Do NOT set DOCKER_HOST here — the Helm chart injects the correct value
+  # (tcp://localhost:2375) automatically based on mountDind.forceTLS=false.
+  # Overriding it risks pointing Lambda at the wrong port (2376 = TLS only).
+
+  # Reduce log noise. Set to "debug" or "trace" when troubleshooting.
+  - name: LS_LOG
+    value: "warn"
+
+# --- DIND (Docker-in-Docker) ---
+# Required for Lambda execution. forceTLS=false → DinD listens on :2375 (plain TCP).
+# The chart auto-sets DOCKER_HOST=tcp://localhost:2375 in the LocalStack container.
+mountDind:
+  enabled: true
+  forceTLS: false
+  image: "docker:29-dind"
+
+# --- SECURITY ---
+# DinD requires privileged to run a Docker daemon inside the pod.
+# fsGroup 1000 ensures LocalStack process can read/write the PVC.
+podSecurityContext:
+  fsGroup: 1000
+
+securityContext:
+  privileged: true
+
+# --- SERVICE ---
+# NodePort 30566 is pinned to avoid drift after redeploy.
+# externalServicePorts (4510-4560) are used by Lambda and other services
+# that bind individual ports per function/resource.
+service:
+  type: NodePort
+  edgeService:
+    name: edge
+    targetPort: 4566
+    nodePort: 30566
+  externalServicePorts:
+    start: 4510
+    end: 4560
+
+# --- PERSISTENCE ---
+# State survives pod restarts (S3 objects, DynamoDB tables, secrets, etc.)
+# StorageClass: local-path (K3s built-in, node-local, NOT replicated).
+persistence:
+  enabled: true
+  storageClass: "local-path"
+  accessModes:
+    - ReadWriteOnce
+  size: 5Gi
+
+# --- RESOURCES ---
+# DinD adds ~512Mi/0.5 CPU overhead for the Docker daemon.
+# Increase memory limit if running many concurrent Lambda functions.
+resources:
+  requests:
+    memory: 512Mi
+    cpu: 500m
+  limits:
+    memory: 3Gi
+    cpu: "2"
+
+# --- NODE PLACEMENT ---
+nodeSelector:
+  node-role.kubernetes.io/localstack: "true"
+
+# Allow scheduling on control-plane nodes (K3s taints them NoSchedule by default).
+tolerations:
+  - key: node-role.kubernetes.io/control-plane
+    operator: Exists
+    effect: NoSchedule

@@ -1,0 +1,15 @@
+# =================================================================
+# Cloudflare Tunnel — kết nối K3s services ra internet
+# =================================================================
+# Zero-downtime: 2 replicas, prefer master nodes, fallback to workers
+# Anti-affinity: 2 pod trên 2 node khác nhau
+# Routing cấu hình trên Cloudflare Dashboard (Public Hostnames)
+# Token: kubectl get secret infra-secrets -n cloudflared
+# =================================================================
+
+replicas: 2
+
+cloudflared:
+  # Pin to a specific version for stability (latest forces imagePullPolicy: Always)
+  image: cloudflare/cloudflared:latest
+  imagePullPolicy: IfNotPresent
