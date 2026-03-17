@@ -1,0 +1,25 @@
+# =================================================================
+# RedShark API — Helm values
+# Deploy: helm upgrade --install redshark ./services/redshark -n redshark
+# =================================================================
+
+image:
+  repository: ghcr.io/helios-ryuu/redshark-api
+  tag: "latest"
+  pullPolicy: Always
+
+replicas: 1
+
+resources:
+  requests:
+    memory: "256Mi"
+    cpu: "250m"
+  limits:
+    memory: "512Mi"
+    cpu: "500m"
+
+# Secret redshark-secrets phải được tạo trước khi deploy (xem NT118.md)
+# kubectl create secret generic redshark-secrets -n redshark \
+#   --from-literal=db-username=redshark-user \
+#   --from-literal=db-password=secret \
+#   --from-literal=db-name=redshark-database

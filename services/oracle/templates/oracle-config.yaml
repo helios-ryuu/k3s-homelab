@@ -92,30 +92,32 @@ data:
             DBMS_OUTPUT.PUT_LINE('PDB $PDB_NAME da ton tai.');
           END IF;
 
-          -- Open PDB (ORA-65019 = already open → safe to ignore on restart)
+          -- Open PDB only if not already open (avoids ORA-65019 in alert.log)
+          DECLARE
+            v_open VARCHAR2(20);
           BEGIN
-            EXECUTE IMMEDIATE 'ALTER PLUGGABLE DATABASE $PDB_NAME OPEN';
-          EXCEPTION
-            WHEN OTHERS THEN
-              IF SQLCODE = -65019 THEN
-                DBMS_OUTPUT.PUT_LINE('PDB $PDB_NAME da mo san.');
-              ELSE RAISE;
-              END IF;
+            SELECT open_mode INTO v_open FROM v\$pdbs WHERE name = UPPER('$PDB_NAME');
+            IF v_open != 'READ WRITE' THEN
+              EXECUTE IMMEDIATE 'ALTER PLUGGABLE DATABASE $PDB_NAME OPEN';
+              DBMS_OUTPUT.PUT_LINE('Da mo PDB $PDB_NAME.');
+            ELSE
+              DBMS_OUTPUT.PUT_LINE('PDB $PDB_NAME da mo san.');
+            END IF;
           END;
           EXECUTE IMMEDIATE 'ALTER PLUGGABLE DATABASE $PDB_NAME SAVE STATE';
-          
-          -- 3. Khoi tao Tablespace USERS
+
+          -- 3. Khoi tao Tablespace USERS (check truoc de tranh ORA-1543 trong alert.log)
           EXECUTE IMMEDIATE 'ALTER SESSION SET CONTAINER = $PDB_NAME';
+          DECLARE
+            v_ts NUMBER;
           BEGIN
-            EXECUTE IMMEDIATE 'CREATE TABLESPACE USERS DATAFILE SIZE 100M AUTOEXTEND ON NEXT 10M MAXSIZE 2G';
-            DBMS_OUTPUT.PUT_LINE('Da khoi tao Tablespace USERS cho $PDB_NAME.');
-          EXCEPTION
-            WHEN OTHERS THEN
-              IF SQLCODE = -1543 THEN
-                DBMS_OUTPUT.PUT_LINE('Tablespace USERS da co san.');
-              ELSE
-                DBMS_OUTPUT.PUT_LINE('Loi TableSpace: ' || SQLERRM);
-              END IF;
+            SELECT COUNT(*) INTO v_ts FROM dba_tablespaces WHERE tablespace_name = 'USERS';
+            IF v_ts = 0 THEN
+              EXECUTE IMMEDIATE 'CREATE TABLESPACE USERS DATAFILE SIZE 100M AUTOEXTEND ON NEXT 10M MAXSIZE 2G';
+              DBMS_OUTPUT.PUT_LINE('Da khoi tao Tablespace USERS cho $PDB_NAME.');
+            ELSE
+              DBMS_OUTPUT.PUT_LINE('Tablespace USERS da co san.');
+            END IF;
           END;
         END;
         /
