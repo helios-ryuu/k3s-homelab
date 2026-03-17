@@ -18,8 +18,5 @@ resources:
     memory: "512Mi"
     cpu: "500m"
 
-# Secret redshark-secrets phải được tạo trước khi deploy (xem NT118.md)
-# kubectl create secret generic redshark-secrets -n redshark \
-#   --from-literal=db-username=redshark-user \
-#   --from-literal=db-password=secret \
-#   --from-literal=db-name=redshark-database
+# Secret redshark-secrets được quản lý bởi Sealed Secrets (secrets/redshark-secrets-redshark.yaml)
+# Xem SETUP.md bước 3.6 để generate, bước 3.8 để cập nhật

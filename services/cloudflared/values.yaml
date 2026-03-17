@@ -4,7 +4,7 @@
 # Zero-downtime: 2 replicas, prefer master nodes, fallback to workers
 # Anti-affinity: 2 pod trên 2 node khác nhau
 # Routing cấu hình trên Cloudflare Dashboard (Public Hostnames)
-# Token: kubectl get secret infra-secrets -n cloudflared
+# Token: managed by Sealed Secrets (secrets/infra-secrets-cloudflared.yaml)
 # =================================================================
 
 replicas: 2

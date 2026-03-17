@@ -152,5 +152,5 @@ kube_deployment_status_replicas_unavailable > 0
 |-------|-----|
 | Prometheus NOT READY | May be loading WAL (1-2 min after start) |
 | Targets DOWN | Check network policies or pod health |
-| Grafana 401/403 | Check `grafana-admin-password` in `infra-secrets` — run `./init-sec.sh monitoring` |
+| Grafana 401/403 | Check `grafana-admin-password` in `infra-secrets` — re-seal and push `secrets/infra-secrets-monitoring.yaml` (SETUP.md 3.8) |
 | Loki no labels | Alloy not shipping logs — check `kubectl logs -n logging -l app.kubernetes.io/name=alloy` |

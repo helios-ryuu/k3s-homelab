@@ -35,7 +35,7 @@ kubectl logs -n cloudflared -l app=cloudflared -f
 
 1. Cloudflare Dashboard → Tunnels → `k3s` → **Configure** → copy new token
 2. Update `.env` with new `CLOUDFLARE_TOKEN`
-3. Re-run `./init-sec.sh cloudflared`
+3. Re-seal and commit (see SETUP.md step 3.8): `kubeseal ... > secrets/infra-secrets-cloudflared.yaml && git push`
 4. `kubectl rollout restart deployment/cloudflared -n cloudflared`
 
 ---

@@ -48,18 +48,15 @@ Commit and push — ArgoCD will reconcile.
 
 ## Secrets
 
-`redshark-secrets` is created by `./init-sec.sh` from `.env`:
+`redshark-secrets` is managed via **Sealed Secrets** — encrypted in `secrets/redshark-secrets-redshark.yaml` and synced by ArgoCD.
 
-```bash
-# .env variables
+Source values in `.env`:
+```
 REDSHARK_DB_USERNAME=<db-username>
 REDSHARK_DB_PASSWORD=<db-password>
-
-# Apply
-./init-sec.sh redshark
 ```
 
-The secret keys are injected as `SPRING_DATASOURCE_USERNAME` / `SPRING_DATASOURCE_PASSWORD` env vars into the container.
+To update: re-seal and commit (see SETUP.md step 3.8). The secret keys are injected as `SPRING_DATASOURCE_USERNAME` / `SPRING_DATASOURCE_PASSWORD` env vars into the container.
 
 ---
 
@@ -108,5 +105,5 @@ The database must exist in LocalStack before the API starts. See `guides/localst
 |-------|-------|-----|
 | Pod not starting | `replicas: 0` in values | Set `replicas: 1` and push |
 | `Failed to connect to datasource` | LocalStack not running or DB missing | Ensure `localstack` app is healthy first |
-| `Secret not found` | `redshark-secrets` missing | Run `./init-sec.sh redshark` |
+| `Secret not found` | `redshark-secrets` missing | Check ArgoCD `secrets` app is synced; re-seal if needed (SETUP.md 3.8) |
 | Readiness probe failing | App still starting (Spring Boot ~30s) | Wait — `initialDelaySeconds: 30` |

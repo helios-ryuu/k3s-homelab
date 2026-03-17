@@ -90,7 +90,7 @@ oracle:
   image: oracle-database-19c:latest
   sid: ORCLCDB
   pdbName: ORCLPDB
-  # password: kubectl get secret infra-secrets -n oracle
+  # password: managed by Sealed Secrets (secrets/infra-secrets-oracle.yaml)
   storage: 10Gi
 
   resources:

@@ -79,6 +79,6 @@ awslocal --endpoint-url=http://localstack.localstack.svc.cluster.local:4566 s3 l
 | Issue | Fix |
 |-------|-----|
 | API not responding | Pod may still be starting (30-60s) |
-| Edition not Pro | Check `LOCALSTACK_AUTH_TOKEN` in `infra-secrets` — run `./init-sec.sh localstack` |
+| Edition not Pro | Check `LOCALSTACK_AUTH_TOKEN` in `infra-secrets` — re-seal and push `secrets/infra-secrets-localstack.yaml` (SETUP.md 3.8) |
 | Lambda/DinD fail | Do NOT set `DOCKER_HOST` manually — chart auto-sets it |
 | S3/DDB/SQS fail | Service may not be initialized yet — retry in ~1 min |

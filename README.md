@@ -1,7 +1,7 @@
 # K3S Homelab — Cụm Hệ Thống Phân Tán
 
 > **5 node** kết nối qua Tailscale mesh VPN — 3 master (HA embedded etcd) + 2 worker
-> Quản lý triển khai: ArgoCD · Chẩn đoán: `ck.sh` · Secrets: `init-sec.sh`
+> Quản lý triển khai: ArgoCD · Chẩn đoán: `ck.sh` · Secrets: Sealed Secrets (GitOps)
 
 Xem [SETUP.md](SETUP.md) để khởi tạo cụm từ đầu.
 
@@ -124,13 +124,24 @@ argocd app wait cloudflared --health --grpc-web
 
 ### Cập nhật Secrets
 
-```bash
-vi .env                        # Sửa giá trị
-./init-sec.sh                  # Apply lại tất cả namespace
-# ./init-sec.sh monitoring     # Hoặc chỉ một namespace
+Secrets được quản lý qua **Sealed Secrets** — xem [SETUP.md](SETUP.md) mục 3.8.
 
-# Restart pod để nhận giá trị mới
-kubectl rollout restart deployment/<name> -n <namespace>
+```bash
+vi .env                # Sửa giá trị
+source .env
+
+# Re-seal namespace cần thay đổi, ví dụ cloudflared:
+kubectl create secret generic infra-secrets \
+    --from-literal=cloudflare-token="$CLOUDFLARE_TOKEN" \
+    ... \
+    -n cloudflared --dry-run=client -o yaml \
+| kubeseal --controller-name=sealed-secrets-controller \
+           --controller-namespace=kube-system \
+           --format yaml --namespace cloudflared \
+> secrets/infra-secrets-cloudflared.yaml
+
+git add secrets/ && git commit -m "secrets: rotate <key>" && git push
+# ArgoCD tự sync — pods restart nếu cần
 ```
 
 ### Xử lý app OutOfSync / lỗi
@@ -227,18 +238,21 @@ Tạo PAT: GitHub → Settings → Developer settings → Personal access tokens
 ```
 k3s-homelab/
 ├── ck.sh                   # Chẩn đoán cụm
-├── init-sec.sh             # Khởi tạo infra-secrets (đọc từ .env)
-├── .env                    # Secrets — gitignored, tạo thủ công
+├── init-sec.sh             # Fallback khẩn cấp (deprecated — dùng Sealed Secrets)
+├── .env                    # Secrets — gitignored, nguồn để tạo sealed secrets
 ├── README.md               # Kiến trúc và hướng dẫn sử dụng
 ├── SETUP.md                # Hướng dẫn khởi tạo cụm từ đầu
 ├── argocd/
 │   └── kustomization.yaml  # Kustomize overlay: upstream install + control-plane affinity + insecure
 ├── argocd-apps/            # ArgoCD Application manifests (app-of-apps)
 │   ├── root.yaml           # Root Application — theo dõi argocd-apps/
+│   ├── sealed-secrets.yaml # Sealed Secrets controller (wave -2)
+│   ├── secrets.yaml        # SealedSecret objects từ secrets/ (wave -1)
 │   ├── services.yaml       # ApplicationSet — cloudflared, logging, mssql, oracle, bigdata, redshark, sure
 │   ├── headlamp.yaml       # Headlamp K8s dashboard (multi-source)
 │   ├── monitoring.yaml     # kube-prometheus-stack (multi-source)
 │   └── localstack.yaml     # LocalStack Pro (multi-source)
+├── secrets/                # SealedSecret YAML (encrypted, safe to commit)
 ├── services/               # Helm charts và values
 │   ├── bigdata/            # Chart: Hadoop + Spark
 │   ├── oracle/             # Chart: Oracle 19c

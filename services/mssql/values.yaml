@@ -92,7 +92,7 @@ mssql:
   # Path: /opt/mssql-tools18/bin/sqlcmd
   # Lưu ý: -No (TrustServerCertificate) cần thiết cho self-signed cert
   initImage: mcr.microsoft.com/mssql/server:2025-latest
-  # password: kubectl get secret infra-secrets -n mssql
+  # password: managed by Sealed Secrets (secrets/infra-secrets-mssql.yaml)
   pid: Developer
   database: MSSQLDB
   storage: 10Gi
