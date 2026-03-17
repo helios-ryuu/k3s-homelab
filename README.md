@@ -314,3 +314,204 @@ helm repo add localstack https://helm.localstack.cloud
 helm repo add headlamp https://headlamp-k8s.github.io/headlamp/
 helm repo update
 ```
+
+---
+
+## 10. Hướng dẫn sử dụng chi tiết
+
+### 10.1 Quy trình triển khai thay đổi
+
+Mọi thay đổi cấu hình đều thực hiện qua Git — ArgoCD tự phát hiện và cho phép sync.
+
+```
+Sửa file trong services/ hoặc argocd-apps/
+        ↓
+git add . && git commit -m "..." && git push
+        ↓
+ArgoCD phát hiện OutOfSync (tự động hoặc refresh thủ công)
+        ↓
+argocd app sync <app> --grpc-web
+        ↓
+ArgoCD apply thay đổi vào cluster
+```
+
+**Ví dụ: thay đổi số replica của cloudflared**
+
+```bash
+# 1. Sửa values
+vi services/cloudflared/values.yaml   # đổi replicas: 2 → 3
+
+# 2. Commit và push
+git add services/cloudflared/values.yaml
+git commit -m "feat(cloudflared): scale to 3 replicas"
+git push
+
+# 3. Sync
+argocd app sync cloudflared --grpc-web
+
+# 4. Kiểm tra
+argocd app wait cloudflared --health --grpc-web
+```
+
+---
+
+### 10.2 Kiểm tra trạng thái cụm
+
+```bash
+# Tổng quan tất cả ArgoCD apps
+argocd app list --grpc-web
+
+# Chi tiết một app (sync status, health, điều kiện lỗi)
+argocd app get <app> --grpc-web
+
+# Xem log pod theo namespace
+kubectl logs -n <namespace> -l app=<label> --tail=100 -f
+
+# Chẩn đoán toàn cụm (7 phần: sys, node, secrets, pvc, res, img, helm)
+./ck.sh
+
+# Chỉ xem workloads một namespace
+./ck.sh res <namespace>
+
+# Xuất báo cáo snapshot ra file
+./ck.sh export   # → ck/ck-HHmmss-ddMMyy.txt
+```
+
+---
+
+### 10.3 Cập nhật Secrets
+
+Secrets **không được lưu trong Git**. Khi cần thêm hoặc đổi giá trị:
+
+```bash
+# 1. Cập nhật file .env (gitignored)
+vi .env
+
+# 2. Áp dụng lại cho tất cả namespace
+./init-sec.sh
+
+# 3. Hoặc chỉ một namespace cụ thể
+./init-sec.sh cloudflared
+
+# 4. Kiểm tra secret đã được cập nhật
+kubectl get secret infra-secrets -n <namespace> \
+    -o jsonpath='{.data.cloudflare-token}' | base64 -d
+```
+
+> **Lưu ý:** Sau khi cập nhật secret, pod cần được restart để nhận giá trị mới:
+> ```bash
+> kubectl rollout restart deployment/<name> -n <namespace>
+> ```
+
+---
+
+### 10.4 Xử lý app bị OutOfSync hoặc lỗi
+
+```bash
+# Xem lý do lỗi
+argocd app get <app> --grpc-web
+
+# Force refresh (xóa cache manifest)
+argocd app get <app> --hard-refresh --grpc-web
+
+# Sync lại (bỏ qua sai khác nhỏ)
+argocd app sync <app> --grpc-web
+
+# Sync và force replace resource (dùng khi resource bị drift nặng)
+argocd app sync <app> --force --grpc-web
+
+# Xem diff giữa git và cluster trước khi sync
+argocd app diff <app> --grpc-web
+```
+
+**App kẹt ở Progressing / Degraded:**
+
+```bash
+# Xem events của pod lỗi
+kubectl describe pod <pod-name> -n <namespace>
+
+# Xem log container lỗi
+kubectl logs <pod-name> -n <namespace> --previous
+```
+
+---
+
+### 10.5 Xóa và triển khai lại một app
+
+```bash
+# Xóa app và toàn bộ tài nguyên (PVC được giữ lại theo storageClass)
+argocd app delete <app> --cascade --grpc-web
+
+# Tạo lại từ root (root sẽ recreate child app)
+argocd app sync root --grpc-web
+
+# Sau đó sync app cụ thể
+argocd app sync <app> --grpc-web
+```
+
+> **Cảnh báo:** `--cascade` xóa toàn bộ K8s resources do app đó quản lý.
+> PVC mặc định **không bị xóa** do `persistentVolumeReclaimPolicy: Retain`.
+
+---
+
+### 10.6 Quản lý BigData (scale thủ công)
+
+HDFS yêu cầu scale theo thứ tự nhất định để tránh mất dữ liệu:
+
+```bash
+# Scale DOWN (phải theo thứ tự: worker → nodemanager → resourcemanager → namenode)
+kubectl scale sts hadoop-datanode   -n bigdata --replicas=0
+kubectl scale sts spark-worker      -n bigdata --replicas=0
+kubectl scale deploy hadoop-nodemgr -n bigdata --replicas=0
+kubectl scale deploy hadoop-rmgr    -n bigdata --replicas=0
+kubectl scale sts hadoop-namenode   -n bigdata --replicas=0
+
+# Scale UP (ngược lại: namenode trước)
+kubectl scale sts hadoop-namenode   -n bigdata --replicas=1
+kubectl scale deploy hadoop-rmgr    -n bigdata --replicas=1
+kubectl scale deploy hadoop-nodemgr -n bigdata --replicas=1
+kubectl scale sts hadoop-datanode   -n bigdata --replicas=3
+kubectl scale sts spark-worker      -n bigdata --replicas=2
+```
+
+> **Lưu ý:** Sau khi scale, ArgoCD sẽ thấy OutOfSync (vì replica count lệch với git).
+> Đây là hành vi mong muốn — **không sync** khi cluster đang ở trạng thái scale-down.
+
+---
+
+### 10.7 Lấy token Headlamp
+
+Headlamp cần ServiceAccount token để đăng nhập:
+
+```bash
+kubectl create token headlamp -n kube-system --duration=8760h
+```
+
+Dán token vào màn hình đăng nhập tại `https://headlamp.helios.id.vn`.
+
+---
+
+### 10.8 CI/CD với GitHub Actions (NT118.Q22)
+
+Repo `NT118.Q22` có workflow tự động build và cập nhật image tag trong `services/redshark/values.yaml`:
+
+**Luồng:**
+```
+Push code lên NT118.Q22
+        ↓
+GitHub Actions build Docker image → push lên registry
+        ↓
+Actions cập nhật image.tag trong k3s-homelab/services/redshark/values.yaml
+        ↓
+ArgoCD phát hiện OutOfSync → sync redshark app
+        ↓
+Cluster pull image mới và rolling update
+```
+
+**Yêu cầu secret trong NT118.Q22 repo:**
+
+| Secret | Giá trị |
+|--------|---------|
+| `K3S_HOMELAB_PAT` | Fine-grained PAT trên repo `k3s-homelab` với quyền **Contents: Read and Write** |
+
+Tạo PAT tại: GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens.
