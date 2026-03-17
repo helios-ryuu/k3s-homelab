@@ -276,10 +276,15 @@ argocd account update-password
 ### 3.4 Đăng ký repo
 
 ```bash
+# Git repo (dùng SSH deploy key)
 argocd repo add git@github.com:helios-ryuu/k3s-homelab.git \
     --ssh-private-key-path /tmp/argocd-deploy-key \
     --name k3s-homelab \
     --grpc-web
+
+# Helm repos (ArgoCD cần đăng ký riêng, khác với `helm repo add`)
+argocd repo add https://kubernetes-sigs.github.io/headlamp/ \
+    --type helm --name headlamp --grpc-web
 ```
 
 ### 3.5 Apply root Application
