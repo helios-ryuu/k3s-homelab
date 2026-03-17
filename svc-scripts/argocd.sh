@@ -57,7 +57,7 @@ do_login() {
         exit 1
     fi
     info "Logging in to ArgoCD at $ARGOCD_URL..."
-    argocd login "$ARGOCD_URL" --username admin --password "$password" --insecure || {
+    argocd login "$ARGOCD_URL" --username admin --password "$password" --insecure --grpc-web || {
         err "argocd login failed"
         exit 1
     }
@@ -80,7 +80,8 @@ do_add_repo() {
     info "Registering k3s-homelab repo..."
     argocd repo add "$REPO_URL" \
         --ssh-private-key-path "$DEPLOY_KEY" \
-        --name k3s-homelab
+        --name k3s-homelab \
+        --grpc-web
     ok "Repo registered: $REPO_URL"
 }
 

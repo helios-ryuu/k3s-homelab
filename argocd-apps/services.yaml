@@ -1,0 +1,35 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: services
+  namespace: argocd
+spec:
+  generators:
+    - list:
+        elements:
+          - name: cloudflared
+          - name: logging
+          - name: mssql
+          - name: oracle
+          - name: bigdata
+          - name: redshark
+          - name: sure
+  template:
+    metadata:
+      name: '{{name}}'
+      namespace: argocd
+    spec:
+      project: default
+      source:
+        repoURL: git@github.com:helios-ryuu/k3s-homelab.git
+        targetRevision: main
+        path: 'services/{{name}}'
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: '{{name}}'
+      syncPolicy:
+        syncOptions:
+          - CreateNamespace=true
+        # automated:
+        #   prune: false
+        #   selfHeal: true
