@@ -1,6 +1,6 @@
 # Distributed Database — Oracle + MSSQL
 
-> Namespaces: `oracle`, `mssql` | Scripts: `svc-scripts/oracle.sh`, `svc-scripts/mssql.sh`
+> Namespaces: `oracle`, `mssql` | ArgoCD Apps: `oracle`, `mssql` | Charts: local `services/oracle/`, `services/mssql/`
 
 ---
 
@@ -12,10 +12,7 @@
 | `node-role.kubernetes.io/database-mssql=true` | MSSQL StatefulSet |
 
 ```bash
-# Oracle nodes
 kubectl label node <node> node-role.kubernetes.io/database-oracle=true
-
-# MSSQL nodes
 kubectl label node <node> node-role.kubernetes.io/database-mssql=true
 ```
 
@@ -26,7 +23,7 @@ kubectl label node <node> node-role.kubernetes.io/database-mssql=true
 ### Oracle
 
 ```
-oracle/
+services/oracle/
 ├── Chart.yaml
 ├── values.yaml        ← replicas, password, resources, nodePort
 └── templates/
@@ -42,7 +39,7 @@ oracle/
 ### MSSQL
 
 ```
-mssql/
+services/mssql/
 ├── Chart.yaml
 ├── values.yaml        ← replicas, password, tasksetCores, resources
 └── templates/
@@ -69,37 +66,37 @@ mssql/
 ### Oracle
 
 ```bash
-# Via main dispatcher
-./k3s.sh deploy oracle
-./k3s.sh delete oracle
-./k3s.sh check oracle
+# Config changes: edit services/oracle/values.yaml → git push → ArgoCD auto-syncs
+argocd app sync oracle --grpc-web
+argocd app wait oracle --health --grpc-web
 
-# Via component script
-./svc-scripts/oracle.sh deploy           # Auto-checks node labels, secrets, image availability
-./svc-scripts/oracle.sh delete           # Full cleanup (helm + ns + PVC)
-./svc-scripts/oracle.sh delete node <n>  # Remove Oracle pod + PVC on a specific node
-./svc-scripts/oracle.sh redeploy
-./svc-scripts/oracle.sh scale <N>        # Scale via helm upgrade
-./svc-scripts/oracle.sh logs
-./svc-scripts/oracle.sh check            # Health check (4 sections)
+# Scale
+kubectl scale statefulset oracle-db -n oracle --replicas=<N>
+
+# Logs
+kubectl logs -n oracle oracle-db-0 -f
+
+# Remove a single instance + its PVC
+kubectl delete pod oracle-db-<N> -n oracle
+kubectl delete pvc oracle-data-oracle-db-<N> -n oracle
 ```
 
 ### MSSQL
 
 ```bash
-# Via main dispatcher
-./k3s.sh deploy mssql
-./k3s.sh delete mssql
-./k3s.sh check mssql
+# Config changes: edit services/mssql/values.yaml → git push → ArgoCD auto-syncs
+argocd app sync mssql --grpc-web
+argocd app wait mssql --health --grpc-web
 
-# Via component script
-./svc-scripts/mssql.sh deploy
-./svc-scripts/mssql.sh delete
-./svc-scripts/mssql.sh delete node <n>   # Remove MSSQL pod + PVC on a specific node
-./svc-scripts/mssql.sh redeploy
-./svc-scripts/mssql.sh scale <N>
-./svc-scripts/mssql.sh logs
-./svc-scripts/mssql.sh check             # Health check (4 sections)
+# Scale
+kubectl scale statefulset mssql-db -n mssql --replicas=<N>
+
+# Logs
+kubectl logs -n mssql mssql-db-0 -c mssql-engine -f
+
+# Remove a single instance + its PVC
+kubectl delete pod mssql-db-<N> -n mssql
+kubectl delete pvc mssql-data-mssql-db-<N> -n mssql
 ```
 
 ---
@@ -125,21 +122,14 @@ mssql/
 
 ---
 
-## Health Check Sections
+## Health Check
 
-### Oracle (`./svc-scripts/oracle.sh check`) — 4 sections
+```bash
+./ck.sh   # section: Resources → oracle / mssql namespace
 
-1. **Pod Status** — oracle-db-0, oracle-db-1
-2. **Oracle Health** — Listener status (lsnrctl), Instance status (sqlplus → `v$instance`)
-3. **Cross-Instance Connectivity** — tnsping both directions, SQL connect both directions
-4. **External Access** — NodePort 31521 reachability per pod
-
-### MSSQL (`./svc-scripts/mssql.sh check`) — 4 sections
-
-1. **Pod Status** — mssql-db-0, mssql-db-1, mssql-db-2
-2. **MSSQL Health** — Server identity (@@SERVERNAME), Database MSSQLDB existence
-3. **Cross-Instance Connectivity** — sqlcmd cross-instance queries (all pairs)
-4. **External Access** — NodePort 31433 reachability per pod
+kubectl get pods -n oracle
+kubectl get pods -n mssql
+```
 
 ---
 
@@ -182,7 +172,7 @@ Oracle uses `imagePullPolicy: Never`. The image must be imported on every node t
 sudo ctr -n k8s.io images import oracle-database-19c.tar
 ```
 
-The deploy script auto-checks image availability and prompts before proceeding if missing.
+Deploy will fail with `ErrImageNeverPull` if the image is missing on the scheduled node.
 
 ---
 
@@ -190,8 +180,7 @@ The deploy script auto-checks image availability and prompts before proceeding i
 
 | Issue | Cause | Fix |
 |-------|-------|-----|
-| Pod MISSING | Not deployed | `./k3s.sh deploy oracle` / `./k3s.sh deploy mssql` |
-| Pod Pending | Node offline | Wait for node online or scale down |
+| Pod Pending | Node offline | Wait for node or scale down |
 | Oracle Listener fails | Oracle needs 3-5 min to start | Retry after startup completes |
 | Oracle ErrImageNeverPull | Image not imported on node | `sudo ctr -n k8s.io images import <file>.tar` |
 | MSSQL sqlcmd fails | Init sidecar still running | Check `kubectl logs -n mssql mssql-db-X -c mssql-init` |

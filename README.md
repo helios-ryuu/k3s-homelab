@@ -228,7 +228,6 @@ Tạo PAT: GitHub → Settings → Developer settings → Personal access tokens
 k3s-homelab/
 ├── ck.sh                   # Chẩn đoán cụm
 ├── init-sec.sh             # Khởi tạo infra-secrets (đọc từ .env)
-├── _lib.sh                 # Thư viện dùng chung (màu sắc, helpers)
 ├── .env                    # Secrets — gitignored, tạo thủ công
 ├── README.md               # Kiến trúc và hướng dẫn sử dụng
 ├── SETUP.md                # Hướng dẫn khởi tạo cụm từ đầu
@@ -237,6 +236,7 @@ k3s-homelab/
 ├── argocd-apps/            # ArgoCD Application manifests (app-of-apps)
 │   ├── root.yaml           # Root Application — theo dõi argocd-apps/
 │   ├── services.yaml       # ApplicationSet — cloudflared, logging, mssql, oracle, bigdata, redshark, sure
+│   ├── headlamp.yaml       # Headlamp K8s dashboard (multi-source)
 │   ├── monitoring.yaml     # kube-prometheus-stack (multi-source)
 │   └── localstack.yaml     # LocalStack Pro (multi-source)
 ├── services/               # Helm charts và values
@@ -245,17 +245,21 @@ k3s-homelab/
 │   ├── mssql/              # Chart: MSSQL 2025
 │   ├── logging/            # Chart: Loki + Alloy
 │   ├── monitoring/         # Values only: kube-prometheus-stack
+│   ├── headlamp/           # Values only: headlamp
 │   ├── cloudflared/        # Chart: Cloudflare Tunnel
 │   ├── localstack/         # Values only: localstack/localstack
 │   ├── sure/               # Raw K8s manifests
 │   └── redshark/           # Chart: RedShark API
 ├── guides/                 # Tài liệu chi tiết từng dịch vụ
+│   ├── _lib.sh             # Shared helpers (màu sắc, functions) cho scripts
 │   ├── bigdata.md
-│   ├── distributed-database.md
-│   ├── monitoring.md
-│   ├── logging.md
 │   ├── cloudflared.md
+│   ├── distributed-database.md
+│   ├── headlamp.md
 │   ├── localstack.md
+│   ├── logging.md
+│   ├── monitoring.md
+│   ├── redshark.md
 │   └── sure.md
 └── ck/                     # Thư mục xuất báo cáo (gitignored)
 ```

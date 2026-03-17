@@ -1,6 +1,6 @@
 # Sure — Finance Management App
 
-> Namespace: `sure` | Script: `svc-scripts/sure.sh` | Manifests: `sure/sure-stack.yaml`
+> Namespace: `sure` | ArgoCD App: `sure` | Manifests: `services/sure/sure-stack.yaml`
 
 ---
 
@@ -15,20 +15,23 @@ kubectl label node <node> app-host=sure
 ## Operations
 
 ```bash
-# Via main dispatcher
-./k3s.sh deploy sure
-./k3s.sh delete sure
-./k3s.sh redeploy sure
-./k3s.sh check sure
+# Config changes: edit services/sure/sure-stack.yaml → git push → ArgoCD auto-syncs
 
-# Via component script
-./svc-scripts/sure.sh deploy              # Checks node readiness before deploy
-./svc-scripts/sure.sh delete
-./svc-scripts/sure.sh redeploy
-./svc-scripts/sure.sh logs                # Tail web logs (default)
-./svc-scripts/sure.sh logs worker         # Tail Sidekiq worker logs
-./svc-scripts/sure.sh setup              # Run Rails DB migrations
-./svc-scripts/sure.sh check              # Health check (4 sections)
+# Manual sync trigger
+argocd app sync sure --grpc-web
+argocd app wait sure --health --grpc-web
+
+# Logs
+kubectl logs -n sure -l app=sure-web -f
+kubectl logs -n sure -l app=sure-worker -f   # Sidekiq background worker
+```
+
+### First-Time Setup
+
+After initial deploy, run database migrations:
+
+```bash
+kubectl exec -it -n sure deploy/sure-web -- bundle exec rails db:prepare
 ```
 
 ---
@@ -77,26 +80,16 @@ kubectl label node <node> app-host=sure
 
 ---
 
-## Health Check Sections
-
-`./svc-scripts/sure.sh check` runs 4 checks:
-
-1. **Pod Status** — sure-postgres, sure-redis, sure-web, sure-worker
-2. **Database Health** — `pg_isready` on PostgreSQL pod
-3. **Redis Health** — `redis-cli ping` on Redis pod
-4. **Web Endpoint** — HTTP status on `http://<node-ip>:30333`
-
----
-
-## First-Time Setup
-
-After initial deploy, run database migrations:
+## Health Check
 
 ```bash
-./svc-scripts/sure.sh setup
-```
+./ck.sh   # section: Resources → sure namespace
 
-This runs `bundle exec rails db:prepare` inside the web pod.
+kubectl get pods -n sure
+kubectl exec -n sure deploy/sure-postgres -- pg_isready
+kubectl exec -n sure deploy/sure-redis -- redis-cli ping
+curl -s -o /dev/null -w "%{http_code}" http://<node-ip>:30333
+```
 
 ---
 
@@ -115,8 +108,7 @@ kubectl exec -it -n sure deploy/sure-web -- rails console
 
 | Issue | Fix |
 |-------|-----|
-| Pod MISSING | `./k3s.sh deploy sure` |
-| Pod Pending | Node offline — wait for node |
+| Pod Pending | Node offline — wait for node or re-label another node |
 | PostgreSQL not ready | Check PVC and `kubectl logs -n sure -l app=sure-postgres` |
 | Redis not responding | Check `kubectl logs -n sure -l app=sure-redis` |
-| Web HTTP fail | Run `./svc-scripts/sure.sh setup` if DB not migrated |
+| Web HTTP fail | Run `kubectl exec -it -n sure deploy/sure-web -- bundle exec rails db:prepare` if DB not migrated |

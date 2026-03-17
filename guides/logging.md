@@ -1,6 +1,6 @@
 # Logging — Loki + Grafana Alloy
 
-> Namespace: `logging` | Script: `svc-scripts/logging.sh` | Chart: local `logging/`
+> Namespace: `logging` | ArgoCD App: `logging` | Chart: local `services/logging/`
 
 ---
 
@@ -16,28 +16,26 @@ kubectl label node <node> node-role.kubernetes.io/logging=true
 
 | Service | URL |
 |---------|-----|
-| **Loki** | `http://<node-ip>:30100` |
-| **Grafana → Loki** | `http://<node-ip>:30300` → Explore → Loki |
+| **Loki API** | `https://loki.helios.id.vn` |
+| **Grafana → Explore → Loki** | `https://grafana.helios.id.vn` |
+
+> **Deploy logging before monitoring** — Grafana auto-configures Loki as a data source on first startup.
 
 ---
 
 ## Operations
 
 ```bash
-# Via main dispatcher
-./k3s.sh deploy logging
-./k3s.sh delete logging
-./k3s.sh redeploy logging
+# Config changes: edit services/logging/values.yaml or templates → git push → ArgoCD auto-syncs
 
-# Via component script
-./svc-scripts/logging.sh deploy
-./svc-scripts/logging.sh delete
-./svc-scripts/logging.sh redeploy
-./svc-scripts/logging.sh logs             # Tail Loki logs (default)
-./svc-scripts/logging.sh logs alloy       # Tail Alloy logs
+# Manual sync trigger
+argocd app sync logging --grpc-web
+argocd app wait logging --health --grpc-web
+
+# Logs
+kubectl logs -n logging -l app=loki -f
+kubectl logs -n logging -l app.kubernetes.io/name=alloy -f   # per-node DaemonSet
 ```
-
-> **Deploy logging before monitoring** — Grafana auto-configures Loki as a data source.
 
 ---
 
@@ -65,11 +63,6 @@ kubectl label node <node> node-role.kubernetes.io/logging=true
 │  ┌────▼─────┐  │    │       │        │    │       │        │
 │  │   Loki   │◄─┼────┼───────┘        │    │       │        │
 │  │  :3100   │◄─┼────┼────────────────┼────┼───────┘        │
-│  └────┬─────┘  │    │                 │    │                 │
-│       │        │    │                 │    │                 │
-│  ┌────▼─────┐  │    │                 │    │                 │
-│  │ Grafana  │  │    │                 │    │                 │
-│  │ :30300   │  │    │                 │    │                 │
 │  └──────────┘  │    │                 │    │                 │
 └────────────────┘    └────────────────┘    └────────────────┘
 ```
@@ -78,9 +71,7 @@ kubectl label node <node> node-role.kubernetes.io/logging=true
 
 ## Grafana Explore — LogQL
 
-### View logs
-
-1. Grafana → Menu → **Explore** → Data source: **Loki** → **Code** mode
+1. `https://grafana.helios.id.vn` → Menu → **Explore** → Data source: **Loki** → **Code** mode
 2. Enter LogQL query → **Shift + Enter**
 
 ### LogQL Cheat Sheet
@@ -104,7 +95,7 @@ kubectl label node <node> node-role.kubernetes.io/logging=true
 # Logs from a node
 {node="<node-name>"}
 
-# Parse + filter
+# Parse JSON + filter
 {namespace="bigdata"} | json | level="ERROR"
 
 # Log rate by namespace
@@ -116,30 +107,24 @@ topk(10, sum(rate({job=~".+"} [5m])) by (pod))
 
 ### Live tail
 
-Explore → Loki → enter query → click **Live** (top-right, next to Run) → streams real-time like `kubectl logs -f`
-
-### Dashboard from Logs
-
-1. Menu → Dashboards → New → Add visualization → **Loki**
-2. Visualization: **Logs** or **Time series** (for `rate(...)`)
-3. Query: `sum(rate({namespace="bigdata"} [5m])) by (pod)`
+Explore → Loki → enter query → click **Live** (top-right) → streams real-time like `kubectl logs -f`
 
 ---
 
 ## Loki API
 
 ```bash
-# Check readiness
-curl -s http://<node-ip>:30100/ready
+# Readiness
+curl -s https://loki.helios.id.vn/ready
 
 # List labels
-curl -s http://<node-ip>:30100/loki/api/v1/labels | jq
+curl -s https://loki.helios.id.vn/loki/api/v1/labels | jq
 
 # Label values
-curl -s http://<node-ip>:30100/loki/api/v1/label/namespace/values | jq
+curl -s https://loki.helios.id.vn/loki/api/v1/label/namespace/values | jq
 
 # Query logs (last 1h)
-curl -sG http://<node-ip>:30100/loki/api/v1/query_range \
+curl -sG https://loki.helios.id.vn/loki/api/v1/query_range \
   --data-urlencode 'query={namespace="bigdata"}' \
   --data-urlencode "start=$(date -d '1 hour ago' +%s)000000000" \
   --data-urlencode "end=$(date +%s)000000000" \

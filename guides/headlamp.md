@@ -1,23 +1,6 @@
 # Headlamp — K8s Dashboard
 
-> Namespace: `kube-system` | Script: `svc-scripts/headlamp.sh` | Chart: `headlamp/headlamp`
-
----
-
-## Operations
-
-```bash
-# Via main dispatcher
-./k3s.sh deploy headlamp
-./k3s.sh delete headlamp
-./k3s.sh redeploy headlamp
-
-# Via component script
-./svc-scripts/headlamp.sh deploy          # Deploys with cluster-admin RBAC
-./svc-scripts/headlamp.sh delete
-./svc-scripts/headlamp.sh redeploy
-./svc-scripts/headlamp.sh token           # Create/retrieve permanent auth token
-```
+> Namespace: `kube-system` | ArgoCD App: `headlamp` | Chart: `kubernetes-sigs/headlamp` v0.39.0
 
 ---
 
@@ -25,22 +8,49 @@
 
 | Endpoint | URL |
 |----------|-----|
-| Via Cloudflare Tunnel | `https://headlamp.<your-domain>` |
+| Via Cloudflare Tunnel | `https://headlamp.helios.id.vn` |
 | In-cluster | `http://headlamp.kube-system.svc.cluster.local:80` |
 
 > Headlamp uses `ClusterIP` — exposed externally via Cloudflare Tunnel (see `guides/cloudflared.md`).
 
 ---
 
-## Authentication Token
-
-Headlamp requires a ServiceAccount token to authenticate. Generate a **permanent** (non-expiring) token:
+## Operations
 
 ```bash
-./svc-scripts/headlamp.sh token
+# Config changes: edit services/headlamp/values.yaml or argocd-apps/headlamp.yaml → git push
+
+# Manual sync trigger
+argocd app sync headlamp --grpc-web
+argocd app wait headlamp --health --grpc-web
+
+# Logs
+kubectl logs -n kube-system -l app.kubernetes.io/name=headlamp -f
 ```
 
-This creates a `kubernetes.io/service-account-token` Secret (static, no TTL) and prints the token. Paste it into the Headlamp login screen.
+---
+
+## Authentication Token
+
+The Helm chart creates SA `headlamp` in `kube-system` and binds it to `cluster-admin` via `ClusterRoleBinding/headlamp-admin`. Generate a **permanent** (non-expiring) token for that SA:
+
+```bash
+kubectl apply -f - <<'EOF'
+apiVersion: v1
+kind: Secret
+metadata:
+  name: headlamp-token
+  namespace: kube-system
+  annotations:
+    kubernetes.io/service-account.name: headlamp
+type: kubernetes.io/service-account-token
+EOF
+
+kubectl get secret headlamp-token -n kube-system \
+  -o jsonpath='{.data.token}' | base64 -d
+```
+
+Paste the token into the Headlamp login screen.
 
 ---
 
@@ -48,6 +58,7 @@ This creates a `kubernetes.io/service-account-token` Secret (static, no TTL) and
 
 | Setting | Value |
 |---------|-------|
+| Chart | `kubernetes-sigs.github.io/headlamp/` v0.39.0 |
 | Replicas | 1 |
 | Mode | In-cluster |
 | Service | ClusterIP:80 |
@@ -55,17 +66,15 @@ This creates a `kubernetes.io/service-account-token` Secret (static, no TTL) and
 | Tolerations | Tolerates `control-plane` NoSchedule taint |
 | Resources | 50-100m CPU, 64-128Mi RAM |
 
----
-
-## RBAC
-
-On first deploy, a `ClusterRoleBinding` `headlamp-admin` is created, binding the `headlamp` ServiceAccount to `cluster-admin`. This gives the dashboard full read/write access to all cluster resources.
+> Chart version is pinned to `0.39.0`. Chart `0.40.x` introduced `-session-ttl` which is unsupported by the headlamp binary and causes CrashLoopBackOff.
 
 ---
 
-## Helm Repo Setup (one-time)
+## ArgoCD Helm Repo
+
+The headlamp Helm repo must be registered in ArgoCD (one-time, already in `SETUP.md`):
 
 ```bash
-helm repo add headlamp https://headlamp-k8s.github.io/headlamp/
-helm repo update
+argocd repo add https://kubernetes-sigs.github.io/headlamp/ \
+  --type helm --name headlamp --grpc-web
 ```

@@ -1,6 +1,6 @@
 # Monitoring — Prometheus + Grafana
 
-> Namespace: `monitoring` | Script: `svc-scripts/monitoring.sh` | Chart: `prometheus-community/kube-prometheus-stack`
+> Namespace: `monitoring` | ArgoCD App: `monitoring` | Chart: `prometheus-community/kube-prometheus-stack` (multi-source)
 
 ---
 
@@ -16,31 +16,28 @@ kubectl label node <node> node-role.kubernetes.io/monitoring=true
 
 | Service | URL |
 |---------|-----|
-| **Grafana** | `http://<node-ip>:30300` |
-| **Prometheus** | `http://<node-ip>:30090` |
+| **Grafana** | `https://grafana.helios.id.vn` |
+| **Prometheus** | `http://<node-ip>:30090` (Tailscale only) |
 
-> Grafana credentials are stored in `infra-secrets` (`admin-user`, `admin-password`).
+> Grafana credentials stored in `infra-secrets` (`admin-user`, `admin-password`).
+
+> **Prerequisite:** Deploy `logging` before `monitoring` — Grafana auto-configures Loki as a data source on first startup.
 
 ---
 
 ## Operations
 
 ```bash
-# Via main dispatcher
-./k3s.sh deploy monitoring
-./k3s.sh delete monitoring
-./k3s.sh redeploy monitoring
-./k3s.sh check monitoring
+# Config changes: edit services/monitoring/values.yaml → git push → ArgoCD auto-syncs
 
-# Via component script
-./svc-scripts/monitoring.sh deploy
-./svc-scripts/monitoring.sh delete
-./svc-scripts/monitoring.sh redeploy
-./svc-scripts/monitoring.sh logs          # Tail Grafana logs
-./svc-scripts/monitoring.sh check         # Health check (5 sections)
+# Manual sync trigger
+argocd app sync monitoring --grpc-web
+argocd app wait monitoring --health --grpc-web
+
+# Logs
+kubectl logs -n monitoring -l app.kubernetes.io/name=grafana -f
+kubectl logs -n monitoring -l app.kubernetes.io/name=prometheus -f
 ```
-
-> **Prerequisite:** Deploy `logging` before `monitoring` — Grafana auto-configures Loki as a data source.
 
 ---
 
@@ -53,18 +50,6 @@ kubectl label node <node> node-role.kubernetes.io/monitoring=true
 | Node Exporter | every node (DaemonSet) | Hardware metrics (CPU, RAM, Disk, Network) |
 | kube-state-metrics | master | K8s object metrics (pods, deployments, PVCs) |
 | Prometheus Operator | master | Auto-manages Prometheus configuration |
-
----
-
-## Health Check Sections
-
-`./svc-scripts/monitoring.sh check` runs 5 checks:
-
-1. **Pod Status** — Prometheus, Grafana, Operator, kube-state-metrics, Node Exporter (DaemonSet), Alloy (DaemonSet), Loki
-2. **Prometheus** — Readiness, scrape targets (up/down/unknown), rules count
-3. **Grafana** — API health, datasources count
-4. **Loki** — Readiness, labels count, query test (recent streams)
-5. **Node Coverage** — Node Exporter and Alloy per-node coverage on all Ready nodes
 
 ---
 
@@ -82,16 +67,11 @@ kubectl label node <node> node-role.kubernetes.io/monitoring=true
 | PVCAlmostFull | PVC > 85% for 5m | warning |
 | LokiDown | Loki unreachable 2m | critical |
 
-View alerts: Grafana → Alerting → Alert rules, or Prometheus → Alerts tab.
+View: Grafana → Alerting → Alert rules, or `http://<node-ip>:30090` → Alerts tab.
 
 ---
 
 ## Grafana Usage
-
-### Explore Metrics
-
-1. Menu → **Explore** → Data source: **Prometheus** → **Code** mode
-2. Enter query → **Shift + Enter**
 
 ### Built-in Dashboards
 
@@ -105,17 +85,9 @@ Menu → **Dashboards** → search:
 | Kubernetes / Compute Resources / Node (Pods) | Per-node pod view |
 | CoreDNS | DNS performance |
 
-### Create Custom Dashboard
+### Explore Metrics
 
-1. Menu → Dashboards → New → New Dashboard
-2. Add visualization → Prometheus
-3. Query, title, Apply, Save
-
-### Alert Rules
-
-1. Menu → Alerting → Alert rules → + New alert rule
-2. Configure query, threshold, evaluation interval
-3. Contact Points: Email, Webhook, Telegram, Slack
+Menu → **Explore** → Data source: **Prometheus** → **Code** mode → Enter query → **Shift + Enter**
 
 ---
 
@@ -161,32 +133,6 @@ container_memory_usage_bytes{container!=""} / 1024 / 1024
 kube_deployment_status_replicas_unavailable > 0
 ```
 
-### Prometheus self-monitoring
-
-```promql
-up                                           # Scrape targets
-process_resident_memory_bytes{job="prometheus"} # Memory usage
-```
-
----
-
-## Direct Prometheus Access
-
-`http://<node-ip>:30090`:
-- **Status → Targets**: all scrape endpoints (green = OK, red = error)
-- **Graph**: run PromQL queries
-- **Status → Runtime**: version, uptime
-
----
-
-## Missing Exporters
-
-| Application | Exporter needed |
-|-------------|----------------|
-| Oracle internals | `oracledb_exporter` |
-| MSSQL internals | `sql_exporter` |
-| Hadoop/Spark jobs | JMX exporter |
-
 ---
 
 ## Resource Usage
@@ -204,8 +150,7 @@ process_resident_memory_bytes{job="prometheus"} # Memory usage
 
 | Issue | Fix |
 |-------|-----|
-| Pod MISSING | `./k3s.sh deploy monitoring` |
-| Prometheus NOT READY | May be loading WAL (1-2 min) |
+| Prometheus NOT READY | May be loading WAL (1-2 min after start) |
 | Targets DOWN | Check network policies or pod health |
-| Grafana 401/403 | Check `grafana-admin-password` in `infra-secrets` |
-| Loki no labels | Alloy not shipping logs — check `./svc-scripts/logging.sh logs alloy` |
+| Grafana 401/403 | Check `grafana-admin-password` in `infra-secrets` — run `./init-sec.sh monitoring` |
+| Loki no labels | Alloy not shipping logs — check `kubectl logs -n logging -l app.kubernetes.io/name=alloy` |

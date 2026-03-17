@@ -7,7 +7,7 @@
 #   ./init-sec.sh <namespace>      Chi ap dung mot namespace
 # =================================================================
 
-source "$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/guides/_lib.sh"
 
 # ======================== LOAD .env ========================
 

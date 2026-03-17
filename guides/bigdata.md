@@ -1,6 +1,6 @@
 # BigData — Hadoop + Spark
 
-> Namespace: `bigdata` | Script: `svc-scripts/bigdata.sh` | Chart: local `bigdata/`
+> Namespace: `bigdata` | ArgoCD App: `bigdata` | Chart: local `services/bigdata/`
 
 ---
 
@@ -21,7 +21,7 @@ kubectl label node <node> node-role.kubernetes.io/bigdata-worker=true
 ## Helm Chart
 
 ```
-bigdata/
+services/bigdata/
 ├── Chart.yaml
 ├── values.yaml             ← workers.replicas, images, resources
 └── templates/
@@ -44,30 +44,28 @@ bigdata/
 ## Operations
 
 ```bash
-# Via main dispatcher
-./k3s.sh deploy bigdata
-./k3s.sh delete bigdata
-./k3s.sh redeploy bigdata
-./k3s.sh check bigdata
+# Config changes: edit services/bigdata/values.yaml → git push → ArgoCD auto-syncs
 
-# Via component script directly
-./svc-scripts/bigdata.sh deploy
-./svc-scripts/bigdata.sh delete
-./svc-scripts/bigdata.sh redeploy
-./svc-scripts/bigdata.sh scale <N>      # Scale workers (0 = shutdown all)
-./svc-scripts/bigdata.sh logs           # Tail NameNode logs
-./svc-scripts/bigdata.sh check          # Health check (6 sections)
+# Manual sync trigger
+argocd app sync bigdata --grpc-web
+argocd app wait bigdata --health --grpc-web
+
+# Logs
+kubectl logs -n bigdata -l app=hadoop-namenode -f
+kubectl logs -n bigdata -l app=spark-master -f
 ```
 
 ### Scaling
 
-```bash
-./svc-scripts/bigdata.sh scale 0    # Shutdown: workers first, then masters
-./svc-scripts/bigdata.sh scale 2    # Restore: masters first, then workers
-./svc-scripts/bigdata.sh scale 3    # Add a third worker
-```
+> **Important:** Scale via `kubectl scale` directly — not via `helm upgrade` — to avoid changing `dfs.replication` which would crash NameNode.
 
-> **Important:** Scaling uses `kubectl scale` directly (not `helm upgrade`) to avoid changing `dfs.replication` which would crash NameNode.
+```bash
+# Shutdown workers
+kubectl scale statefulset hadoop-datanode hadoop-nodemgr spark-worker -n bigdata --replicas=0
+
+# Restore / add workers
+kubectl scale statefulset hadoop-datanode hadoop-nodemgr spark-worker -n bigdata --replicas=2
+```
 
 ---
 
@@ -84,16 +82,20 @@ bigdata/
 
 ---
 
-## Health Check Sections
+## Health Check
 
-`./svc-scripts/bigdata.sh check` runs 6 checks:
+```bash
+./ck.sh   # section: Resources → bigdata namespace
 
-1. **Pod Status** — all 9 expected pods (3 masters + 6 workers)
-2. **HDFS** — NameNode report, live DataNodes, capacity, under-replicated/missing/corrupt blocks, read/write test
-3. **YARN** — ResourceManager active status, registered NodeManagers, cluster resources
-4. **Spark** — Master API status, registered workers (cores/mem/state)
-5. **Cross-Component** — Spark → HDFS NameNode connectivity, Spark binary check
-6. **External Endpoints** — HDFS WebUI, YARN WebUI, Spark WebUI reachability via Tailscale
+# Pod status
+kubectl get pods -n bigdata
+
+# HDFS report
+kubectl exec -n bigdata deploy/hadoop-namenode -- hdfs dfsadmin -report
+
+# YARN nodes
+kubectl exec -n bigdata deploy/hadoop-rmgr -- yarn node -list
+```
 
 ---
 
@@ -167,6 +169,6 @@ kubectl exec -it -n bigdata $MASTER_POD -- /opt/spark/bin/pyspark \
 | Issue | Cause | Fix |
 |-------|-------|-----|
 | YARN 0 NodeManagers | Missing ports 8030-8033 on RM Service | Check `hadoop-rmgr.yaml` service ports |
-| Pod Pending | Worker node offline | Wait for node or `./svc-scripts/bigdata.sh scale` down |
+| Pod Pending | Worker node offline | Wait for node or scale down replicas |
 | HDFS write fails | DataNodes not yet registered (30-60s after deploy) | Wait and retry |
-| NameNode crash on upgrade | `dfs.replication` changed via helm upgrade | Use `./svc-scripts/bigdata.sh scale` instead |
+| NameNode crash on upgrade | `dfs.replication` changed via helm upgrade | Use `kubectl scale` instead |

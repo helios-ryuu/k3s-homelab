@@ -3,7 +3,7 @@
 # _lib.sh — Shared helpers for k3s scripts
 # =================================================================
 
-K3S_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+K3S_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # Colors
 GREEN='\033[0;32m'
