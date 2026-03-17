@@ -256,13 +256,15 @@ Vào `github.com/helios-ryuu/k3s-homelab` → Settings → Deploy keys → Add d
 
 ### 3.3 Đăng nhập ArgoCD CLI
 
-Sau khi cả 3.2a và 3.2b hoàn thành:
+Tunnel chưa hoạt động ở bước này (cloudflared chưa được deploy). Vì đang chạy kubectl **trực tiếp trên node k3s**, có thể kết nối thẳng vào ClusterIP — không cần port-forward:
 
 ```bash
 ARGOCD_PASSWORD=$(kubectl get secret argocd-initial-admin-secret -n argocd \
     -o jsonpath='{.data.password}' | base64 -d)
 
-argocd login argocd.helios.id.vn \
+ARGOCD_IP=$(kubectl get svc argocd-server -n argocd -o jsonpath='{.spec.clusterIP}')
+
+argocd login $ARGOCD_IP:80 \
     --username admin \
     --password "$ARGOCD_PASSWORD" \
     --insecure --grpc-web
@@ -288,20 +290,24 @@ kubectl apply -n argocd -f argocd-apps/root.yaml
 
 Trao quyền quản lý toàn bộ apps cho ArgoCD. Từ đây ArgoCD tự động sync khi có thay đổi trong Git.
 
----
+### 3.6 Sync cloudflared và đóng port-forward
 
-## 4. First Sync
-
-Apps có `automated.selfHeal: true` nên sẽ tự sync sau khi root được apply. Tuy nhiên lần đầu cần sync thủ công theo thứ tự — cloudflared phải lên trước để tunnel hoạt động cho các bước tiếp theo.
-
-### 4.1 Sync cloudflared
+Sync cloudflared qua port-forward trước, sau đó tunnel sẽ lên và các lệnh tiếp theo dùng được domain:
 
 ```bash
 argocd app sync cloudflared --grpc-web
 argocd app wait cloudflared --health --grpc-web
 ```
 
-### 4.2 Thêm Cloudflare tunnel routes cho các dịch vụ còn lại
+Kiểm tra tunnel đã sống: `curl -sf https://argocd.helios.id.vn/healthz`
+
+---
+
+## 4. First Sync
+
+Apps có `automated.selfHeal: true` nên sẽ tự sync sau khi root được apply. Tuy nhiên lần đầu cần sync thủ công theo thứ tự — cloudflared phải lên trước để tunnel hoạt động cho các bước tiếp theo.
+
+### 4.1 Thêm Cloudflare tunnel routes cho các dịch vụ còn lại
 
 Sau khi cloudflared healthy, thêm routes trên **Cloudflare Dashboard**:
 
@@ -309,11 +315,12 @@ Sau khi cloudflared healthy, thêm routes trên **Cloudflare Dashboard**:
 
 | Subdomain | Domain | Service |
 |-----------|--------|---------|
-| `grafana` | `helios.id.vn` | `http://mon-grafana.monitoring.svc.cluster.local:80` |
+| `grafana` | `helios.id.vn` | `http://monitoring-grafana.monitoring.svc.cluster.local:80` |
 | `localstack` | `helios.id.vn` | `http://localstack.localstack.svc.cluster.local:4566` |
 | `loki` | `helios.id.vn` | `http://loki.logging.svc.cluster.local:3100` |
+| `headlamp` | `helios.id.vn` | `http://headlamp.kube-system.svc.cluster.local:80` |
 
-### 4.3 Sync các app còn lại
+### 4.2 Sync các app còn lại
 
 ```bash
 # Logging — Loki + Alloy
@@ -336,7 +343,7 @@ argocd app sync mssql --grpc-web
 argocd app sync bigdata --grpc-web
 
 # Apps
-argocd app sync redshark --grpc-web
+argocd app sync headlamp --grpc-web
 argocd app sync sure --grpc-web
 
 # Xem trạng thái tất cả
