@@ -3,470 +3,173 @@
 > **5 node** kết nối qua Tailscale mesh VPN — 3 master (HA embedded etcd) + 2 worker
 > Quản lý triển khai: ArgoCD · Chẩn đoán: `ck.sh` · Secrets: `init-sec.sh`
 
----
-
-## 1. Topology
-
-| Node | Vai trò | OS | Tailscale IP | Workloads |
-|------|---------|----|--------------|-----------|
-| `<node-1>` | master | Ubuntu | `<ip-1>` | monitoring, logging, bigdata masters, localstack, headlamp |
-| `<node-2>` | master | Ubuntu | `<ip-2>` | cloudflared, sure-stack |
-| `<node-3>` | master | Fedora | `<ip-3>` | oracle-db-0, mssql-db-1, bigdata workers |
-| `<node-4>` | worker | Ubuntu | `<ip-4>` | mssql-db-0 · **có thể offline** |
-| `<node-5>` | worker | Ubuntu (WSL2) | `<ip-5>` | oracle-db-1, mssql-db-2, bigdata workers · **có thể offline** |
-
-### Node Labels (bắt buộc)
-
-Workloads dùng `nodeSelector` để chọn node. Gán label trước khi triển khai:
-
-```bash
-# Monitoring & Logging
-kubectl label node <node> node-role.kubernetes.io/monitoring=true
-kubectl label node <node> node-role.kubernetes.io/logging=true
-
-# BigData
-kubectl label node <node> node-role.kubernetes.io/bigdata-master=true
-kubectl label node <node> node-role.kubernetes.io/bigdata-worker=true
-
-# Cơ sở dữ liệu
-kubectl label node <node> node-role.kubernetes.io/database-oracle=true
-kubectl label node <node> node-role.kubernetes.io/database-mssql=true
-
-# Sure App
-kubectl label node <node> app-host=sure
-```
+Xem [SETUP.md](SETUP.md) để khởi tạo cụm từ đầu.
 
 ---
 
-## 2. Quản lý cụm (ArgoCD)
+## Topology
 
-Mọi triển khai được quản lý bởi **ArgoCD** theo mô hình app-of-apps. Dùng ArgoCD CLI hoặc giao diện web tại `https://argocd.helios.id.vn`.
+| Node | Hostname | OS | Tailscale IP | Vai trò | Workloads |
+|------|----------|-----|--------------|---------|-----------|
+| master-1 | `helios-imac-ubuntu` | Ubuntu | `100.102.51.39` | master | monitoring, logging, bigdata-master, localstack, sure |
+| master-2 | `helios-droplet-ubuntu` | Ubuntu | `100.122.163.31` | master | cloudflared |
+| master-3 | `helios` | Fedora | `100.110.86.71` | master | bigdata-worker, oracle-db-0, mssql-db-1 |
+| worker-1 | `diepvi` | Ubuntu | `100.86.204.84` | worker | mssql-db-0 · **có thể offline** |
+| worker-2 | `sinister` | Ubuntu | `100.73.216.110` | worker | bigdata-worker, oracle-db-1, mssql-db-2 · **có thể offline** |
 
-### Các lệnh thường dùng
+---
 
-```bash
-argocd app list                            # Xem trạng thái tất cả apps
-argocd app get <app>                       # Chi tiết một app
-argocd app sync <app> --grpc-web           # Đồng bộ một app
-argocd app sync root --grpc-web            # Đồng bộ tất cả (qua root)
-argocd app delete <app> --cascade          # Xóa app và tài nguyên
+## Truy cập dịch vụ
+
+### Qua Cloudflare Tunnel (HTTPS, public)
+
+| Dịch vụ | URL |
+|---------|-----|
+| ArgoCD | `https://argocd.helios.id.vn` |
+| Grafana | `https://grafana.helios.id.vn` |
+| LocalStack | `https://localstack.helios.id.vn` |
+| Loki | `https://loki.helios.id.vn` |
+
+### Qua NodePort (Tailscale, internal)
+
+| Dịch vụ | Host | Port |
+|---------|------|------|
+| Grafana | `100.102.51.39` | `30300` |
+| Prometheus | `100.102.51.39` | `30090` |
+| Loki | `100.102.51.39` | `30100` |
+| LocalStack | `100.102.51.39` | `30566` |
+| Sure App | `100.102.51.39` | `30333` |
+| Oracle (node-0) | `100.110.86.71` | `31521` |
+| Oracle (node-1) | `100.73.216.110` | `31521` |
+| MSSQL (db-0) | `100.86.204.84` | `31433` |
+| MSSQL (db-1) | `100.110.86.71` | `31433` |
+| MSSQL (db-2) | `100.73.216.110` | `31433` |
+| HDFS WebUI | `100.102.51.39` | `9870` |
+| YARN WebUI | `100.102.51.39` | `8088` |
+| Spark WebUI | `100.102.51.39` | `30808` |
+
+### Kết nối database nội bộ (trong cluster)
+
 ```
+# Oracle
+oracle-db-0.oracle-svc.oracle.svc.cluster.local:1521
+oracle-db-1.oracle-svc.oracle.svc.cluster.local:1521
+# TNS alias (tnsnames.ora): ORACLE_DB_0, ORACLE_DB_1
 
-### Thứ tự sync (lần đầu)
-
-```bash
-argocd app sync root --grpc-web        # Tạo tất cả child apps
-argocd app sync cloudflared --grpc-web # 1. Tunnel trước (mở đường vào cluster)
-argocd app sync logging --grpc-web     # 2. Logging
-argocd app sync monitoring --grpc-web  # 3. Monitoring
-argocd app sync localstack --grpc-web  # 4. LocalStack
-argocd app sync redshark --grpc-web    # 5. RedShark API
-argocd app sync sure --grpc-web        # 6. Sure App
-# ... còn lại theo thứ tự tùy ý
-```
-
-### Hành vi khi node offline
-
-- Worker offline → pod chuyển **Pending** (không reschedule do hard anti-affinity)
-- Scale về 0 → pod bị xóa, **PVC được giữ nguyên**
-- Scale lại → pod tái tạo, mount lại PVC cũ
-
-### Bootstrap ArgoCD (một lần duy nhất)
-
-```bash
-# Toàn bộ luồng: cài ArgoCD + đăng ký repo + apply root app
-bash svc-scripts/argocd.sh bootstrap
-
-# Hoặc từng bước:
-bash svc-scripts/argocd.sh install      # Cài ArgoCD vào cluster
-bash svc-scripts/argocd.sh login        # Đăng nhập ArgoCD CLI
-bash svc-scripts/argocd.sh add-repo     # Đăng ký repo GitHub (deploy key)
-bash svc-scripts/argocd.sh apply-root   # Apply root Application
+# MSSQL
+mssql-db-0.mssql-svc.mssql.svc.cluster.local,1433
+mssql-db-1.mssql-svc.mssql.svc.cluster.local,1433
+mssql-db-2.mssql-svc.mssql.svc.cluster.local,1433
 ```
 
 ---
 
-## 3. Chẩn đoán cụm (`ck.sh`)
+## Helm Charts
 
-```bash
-./ck.sh                    # Kiểm tra toàn bộ — 7 phần
-./ck.sh sys                # [1/7] Hệ thống & tải (RAM, CPU, disk, uptime)
-./ck.sh node               # [2/7] Nodes & bố cục pod (nhóm theo node)
-./ck.sh secrets            # [3/7] Secrets (theo namespace, chỉ hiện tên)
-./ck.sh pvc                # [4/7] PVC / Storage (nhóm theo node)
-./ck.sh res                # [5/7] Tài nguyên triển khai (deploy, sts, ds, hpa, svc)
-./ck.sh img                # [6/7] Images & mức sử dụng theo node
-./ck.sh helm               # [7/7] Helm releases
-```
-
-### Lọc theo namespace
-
-```bash
-./ck.sh res bigdata        # Tài nguyên trong namespace bigdata
-```
-
-### Xuất báo cáo
-
-```bash
-./ck.sh export             # → ck/ck-HHmmss-ddMMyy.txt
-```
+| Release | Namespace | Chart | Mô tả |
+|---------|-----------|-------|-------|
+| `bigd` | `bigdata` | local `services/bigdata/` | Hadoop 3.2.1 + Spark 3.5.8 |
+| `ora` | `oracle` | local `services/oracle/` | Oracle 19c (2 instances) |
+| `mssql` | `mssql` | local `services/mssql/` | MSSQL 2025 (3 instances) |
+| `localstack` | `localstack` | `localstack/localstack` | LocalStack Pro (AWS emulator) |
+| `log` | `logging` | local `services/logging/` | Loki 3.6.7 + Grafana Alloy |
+| `mon` | `monitoring` | `prometheus-community/kube-prometheus-stack` `82.x` | Prometheus + Grafana |
+| `cfd` | `cloudflared` | local `services/cloudflared/` | Cloudflare Tunnel (2 replicas) |
+| — | `sure` | raw manifests `services/sure/` | Sure Finance App (Rails + PG + Redis) |
+| — | `redshark` | local `services/redshark/` | RedShark API (Spring Boot) |
 
 ---
 
-## 4. Helm Charts
+## Quản lý cụm
 
-| Release | Namespace | Chart | Mô tả | Hướng dẫn |
-|---------|-----------|-------|-------|-----------|
-| `bigd` | `bigdata` | local `bigdata/` | Hadoop 3.2.1 + Spark 3.5.8 | [guides/bigdata.md](guides/bigdata.md) |
-| `ora` | `oracle` | local `oracle/` | Oracle 19c (2 instances) | [guides/distributed-database.md](guides/distributed-database.md) |
-| `mssql` | `mssql` | local `mssql/` | MSSQL 2025 (3 instances) | [guides/distributed-database.md](guides/distributed-database.md) |
-| `localstack` | `localstack` | `localstack/localstack` | LocalStack Pro (giả lập AWS) | [guides/localstack.md](guides/localstack.md) |
-| `log` | `logging` | local `logging/` | Loki + Grafana Alloy | [guides/logging.md](guides/logging.md) |
-| `mon` | `monitoring` | `kube-prometheus-stack` | Prometheus + Grafana | [guides/monitoring.md](guides/monitoring.md) |
-| `cfd` | `cloudflared` | local `cloudflared/` | Cloudflare Tunnel (2 replicas) | [guides/cloudflared.md](guides/cloudflared.md) |
-| — | `sure` | raw manifests | Sure Finance App (Rails + PG + Redis) | [guides/sure.md](guides/sure.md) |
-| `headlamp` | `kube-system` | `headlamp/headlamp` | K8s Dashboard UI | [guides/headlamp.md](guides/headlamp.md) |
-
----
-
-## 5. Secrets (`infra-secrets`)
-
-Giá trị nhạy cảm lưu trong K8s Secret `infra-secrets` (một bản mỗi namespace).
-Các chart dùng `secretKeyRef` — **không bao giờ hardcode** trong `values.yaml`.
+### Chẩn đoán (`ck.sh`)
 
 ```bash
-# Khởi tạo/cập nhật secrets tất cả namespace (đọc từ .env)
-./init-sec.sh
-
-# Khởi tạo cho một namespace cụ thể
-./init-sec.sh <namespace>
-
-# Xem giá trị một key
-kubectl get secret infra-secrets -n <namespace> -o jsonpath='{.data.<key>}' | base64 -d
+./ck.sh                    # Kiểm tra toàn bộ — 6 phần
+./ck.sh sys                # [1/6] Hệ thống & tải (RAM, CPU, disk, uptime)
+./ck.sh node               # [2/6] Nodes & bố cục pod (nhóm theo node)
+./ck.sh secrets            # [3/6] Secrets (theo namespace, chỉ hiện tên)
+./ck.sh pvc                # [4/6] PVC / Storage (nhóm theo node)
+./ck.sh res                # [5/6] Tài nguyên triển khai (deploy, sts, ds, hpa, svc)
+./ck.sh res <namespace>    # Lọc theo namespace (vd: ./ck.sh res bigdata)
+./ck.sh img                # [6/6] Images & mức sử dụng theo node
+./ck.sh helm               # Helm releases
+./ck.sh export             # Xuất báo cáo → ck/ck-HHmmss-ddMMyy.txt
 ```
 
-| Key | Dùng bởi | Mô tả |
-|-----|----------|-------|
-| `cloudflare-token` | `cloudflared` | Token Cloudflare Tunnel |
-| `localstack-token` | `localstack` | License key LocalStack Pro |
-| `grafana-admin-password` | `monitoring` | Mật khẩu admin Grafana |
-| `admin-user` / `admin-password` | `monitoring` | Auth Grafana (existingSecret) |
-| `mssql-password` | `mssql` | Mật khẩu SA |
-| `oracle-password` | `oracle` | Mật khẩu SYS |
-| `sure-secret-key-base` | `sure` | Rails Secret Key Base |
-| `sure-postgres-password` | `sure` | Mật khẩu Postgres |
+### Quy trình thay đổi cấu hình
 
----
-
-## 6. Truy cập dịch vụ
-
-| Dịch vụ | URL | Cổng |
-|---------|-----|------|
-| Grafana | `https://grafana.<domain>` · `http://<ip>:30300` | NodePort 30300 |
-| Prometheus | `http://<ip>:30090` | NodePort 30090 |
-| Headlamp | `https://headlamp.<domain>` | ClusterIP → Tunnel |
-| HDFS WebUI | `http://<ip>:9870` | hostPort |
-| YARN WebUI | `http://<ip>:8088` | hostPort |
-| Spark WebUI | `http://<ip>:30808` | NodePort 30808 |
-| Loki | `http://<ip>:30100` | NodePort 30100 |
-| Oracle | `<ip>:31521` | NodePort 31521 |
-| MSSQL | `<ip>:31433` | NodePort 31433 |
-| LocalStack | `http://<ip>:30566` | NodePort 30566 |
-| Sure App | `http://<ip>:30333` | NodePort 30333 |
-
----
-
-## 7. Thêm node K3s
-
-### Điều kiện
-
-1. Tailscale đã cài và join vào cùng tailnet
-2. Node mới ping được master: `ping <master-ip>`
-3. Cổng `6443` mở qua Tailscale
-
-### Lấy token
-
-```bash
-# Trên master đầu tiên
-sudo cat /var/lib/rancher/k3s/server/node-token
-```
-
-### Thêm Master (server)
-
-```bash
-curl -sfL https://get.k3s.io | \
-    K3S_URL=https://<master-ip>:6443 \
-    K3S_TOKEN=<TOKEN> \
-    sh -s - server \
-    --node-ip=<TAILSCALE_IP> \
-    --advertise-address=<TAILSCALE_IP> \
-    --flannel-iface=tailscale0 \
-    --write-kubeconfig-mode 644 \
-    --tls-san=<TAILSCALE_IP>
-```
-
-### Thêm Worker (agent)
-
-```bash
-curl -sfL https://get.k3s.io | \
-    K3S_URL=https://<master-ip>:6443 \
-    K3S_TOKEN=<TOKEN> \
-    sh -s - agent \
-    --node-ip=<TAILSCALE_IP> \
-    --flannel-iface=tailscale0
-```
-
-### Sau khi join
-
-```bash
-kubectl get nodes
-kubectl label node <name> node-role.kubernetes.io/worker=worker
-```
-
----
-
-## 8. Chuyển đổi HA (1 Master → 3 Masters)
-
-### Bước 1 — Bật cluster-init trên master hiện tại
-
-```bash
-sudo systemctl stop k3s
-curl -sfL https://get.k3s.io | sh -s - server \
-    --cluster-init \
-    --node-ip=<master-ip> \
-    --flannel-iface=tailscale0
-sudo cat /var/lib/rancher/k3s/server/node-token
-```
-
-### Bước 2 — Join master #2 và #3
-
-Dùng lệnh "Thêm Master" ở mục 7.
-
-### Bước 3 — Chuyển worker thành master (nếu cần)
-
-```bash
-/usr/local/bin/k3s-agent-uninstall.sh
-# Sau đó chạy lệnh "Thêm Master"
-```
-
-### Lưu ý HA
-
-- **Tối thiểu 3 master** để đảm bảo HA (etcd Raft quorum)
-- 1 master offline → cụm vẫn hoạt động (quorum 2/3)
-- 2 master offline → **mất quorum**, chỉ đọc
-- Ping giữa các master nên < 100ms
-- Worker offline **không ảnh hưởng** control plane
-
----
-
-## 9. Cấu trúc thư mục
-
-```
-k3s-homelab/
-├── ck.sh                   # Chẩn đoán cụm (7 phần + xuất báo cáo)
-├── init-sec.sh             # Khởi tạo infra-secrets (tất cả namespace)
-├── _lib.sh                 # Thư viện dùng chung (màu sắc, kubectl wrappers)
-├── README.md               # File này
-├── argocd-apps/            # ArgoCD Application manifests (app-of-apps)
-│   ├── root.yaml           # Root Application — theo dõi argocd-apps/
-│   ├── cloudflared.yaml    # Cloudflare Tunnel
-│   ├── monitoring.yaml     # kube-prometheus-stack (multi-source)
-│   ├── logging.yaml        # Loki + Alloy
-│   ├── localstack.yaml     # LocalStack Pro (multi-source)
-│   ├── headlamp.yaml       # Headlamp K8s Dashboard (multi-source)
-│   ├── sure.yaml           # Sure Finance App (raw manifests)
-│   ├── bigdata.yaml        # Hadoop + Spark
-│   ├── oracle.yaml         # Oracle 19c
-│   ├── mssql.yaml          # MSSQL 2025
-│   └── redshark.yaml       # RedShark API
-├── services/               # Helm charts và values
-│   ├── bigdata/            # Chart cục bộ: Hadoop + Spark
-│   ├── oracle/             # Chart cục bộ: Oracle 19c
-│   ├── mssql/              # Chart cục bộ: MSSQL 2025
-│   ├── logging/            # Chart cục bộ: Loki + Alloy
-│   ├── monitoring/         # Values only: kube-prometheus-stack
-│   ├── cloudflared/        # Chart cục bộ: Cloudflare Tunnel
-│   ├── localstack/         # Values only: localstack/localstack
-│   ├── headlamp/           # Values only: headlamp/headlamp
-│   ├── sure/               # Raw K8s manifests
-│   └── redshark/           # Chart cục bộ: RedShark API
-├── svc-scripts/            # Scripts vận hành
-│   └── argocd.sh           # Bootstrap ArgoCD (cài đặt, đăng nhập, đăng ký repo)
-├── guides/                 # Tài liệu chi tiết từng dịch vụ
-│   ├── bigdata.md
-│   ├── distributed-database.md
-│   ├── monitoring.md
-│   ├── logging.md
-│   ├── cloudflared.md
-│   ├── localstack.md
-│   ├── sure.md
-│   └── headlamp.md
-└── ck/                     # Thư mục xuất báo cáo (ck-*.txt)
-```
-
----
-
-## Helm Repos (cài một lần)
-
-```bash
-helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
-helm repo add localstack https://helm.localstack.cloud
-helm repo add headlamp https://headlamp-k8s.github.io/headlamp/
-helm repo update
-```
-
----
-
-## 10. Hướng dẫn sử dụng chi tiết
-
-### 10.1 Quy trình triển khai thay đổi
-
-Mọi thay đổi cấu hình đều thực hiện qua Git — ArgoCD tự phát hiện và cho phép sync.
+Mọi thay đổi đều qua Git → ArgoCD:
 
 ```
 Sửa file trong services/ hoặc argocd-apps/
         ↓
-git add . && git commit -m "..." && git push
+git add <file> && git commit -m "..." && git push
         ↓
-ArgoCD phát hiện OutOfSync (tự động hoặc refresh thủ công)
+ArgoCD phát hiện OutOfSync
         ↓
 argocd app sync <app> --grpc-web
-        ↓
-ArgoCD apply thay đổi vào cluster
 ```
 
-**Ví dụ: thay đổi số replica của cloudflared**
+**Ví dụ: thay đổi replica cloudflared**
 
 ```bash
-# 1. Sửa values
-vi services/cloudflared/values.yaml   # đổi replicas: 2 → 3
-
-# 2. Commit và push
+vi services/cloudflared/values.yaml   # replicas: 2 → 3
 git add services/cloudflared/values.yaml
 git commit -m "feat(cloudflared): scale to 3 replicas"
 git push
-
-# 3. Sync
 argocd app sync cloudflared --grpc-web
-
-# 4. Kiểm tra
 argocd app wait cloudflared --health --grpc-web
 ```
 
----
-
-### 10.2 Kiểm tra trạng thái cụm
+### Cập nhật Secrets
 
 ```bash
-# Tổng quan tất cả ArgoCD apps
-argocd app list --grpc-web
+vi .env                        # Sửa giá trị
+./init-sec.sh                  # Apply lại tất cả namespace
+# ./init-sec.sh monitoring     # Hoặc chỉ một namespace
 
-# Chi tiết một app (sync status, health, điều kiện lỗi)
-argocd app get <app> --grpc-web
+# Restart pod để nhận giá trị mới
+kubectl rollout restart deployment/<name> -n <namespace>
+```
 
-# Xem log pod theo namespace
-kubectl logs -n <namespace> -l app=<label> --tail=100 -f
+### Xử lý app OutOfSync / lỗi
 
-# Chẩn đoán toàn cụm (7 phần: sys, node, secrets, pvc, res, img, helm)
-./ck.sh
+```bash
+argocd app get <app> --grpc-web              # Xem lý do
+argocd app get <app> --hard-refresh --grpc-web  # Force refresh cache
+argocd app diff <app> --grpc-web             # Xem diff trước khi sync
+argocd app sync <app> --grpc-web             # Sync thường
+argocd app sync <app> --force --grpc-web     # Force replace (drift nặng)
 
-# Chỉ xem workloads một namespace
-./ck.sh res <namespace>
+# Debug pod
+kubectl describe pod <pod> -n <namespace>
+kubectl logs <pod> -n <namespace> --previous
+```
 
-# Xuất báo cáo snapshot ra file
-./ck.sh export   # → ck/ck-HHmmss-ddMMyy.txt
+### Xóa và triển khai lại app
+
+```bash
+argocd app delete <app> --cascade --grpc-web   # Xóa app + resources (PVC giữ lại)
+argocd app sync root --grpc-web                # Root recreate child app
+argocd app sync <app> --grpc-web               # Sync lại
 ```
 
 ---
 
-### 10.3 Cập nhật Secrets
+## BigData — Scale thủ công
 
-Secrets **không được lưu trong Git**. Khi cần thêm hoặc đổi giá trị:
-
-```bash
-# 1. Cập nhật file .env (gitignored)
-vi .env
-
-# 2. Áp dụng lại cho tất cả namespace
-./init-sec.sh
-
-# 3. Hoặc chỉ một namespace cụ thể
-./init-sec.sh cloudflared
-
-# 4. Kiểm tra secret đã được cập nhật
-kubectl get secret infra-secrets -n <namespace> \
-    -o jsonpath='{.data.cloudflare-token}' | base64 -d
-```
-
-> **Lưu ý:** Sau khi cập nhật secret, pod cần được restart để nhận giá trị mới:
-> ```bash
-> kubectl rollout restart deployment/<name> -n <namespace>
-> ```
-
----
-
-### 10.4 Xử lý app bị OutOfSync hoặc lỗi
+HDFS yêu cầu scale theo thứ tự để tránh mất dữ liệu:
 
 ```bash
-# Xem lý do lỗi
-argocd app get <app> --grpc-web
-
-# Force refresh (xóa cache manifest)
-argocd app get <app> --hard-refresh --grpc-web
-
-# Sync lại (bỏ qua sai khác nhỏ)
-argocd app sync <app> --grpc-web
-
-# Sync và force replace resource (dùng khi resource bị drift nặng)
-argocd app sync <app> --force --grpc-web
-
-# Xem diff giữa git và cluster trước khi sync
-argocd app diff <app> --grpc-web
-```
-
-**App kẹt ở Progressing / Degraded:**
-
-```bash
-# Xem events của pod lỗi
-kubectl describe pod <pod-name> -n <namespace>
-
-# Xem log container lỗi
-kubectl logs <pod-name> -n <namespace> --previous
-```
-
----
-
-### 10.5 Xóa và triển khai lại một app
-
-```bash
-# Xóa app và toàn bộ tài nguyên (PVC được giữ lại theo storageClass)
-argocd app delete <app> --cascade --grpc-web
-
-# Tạo lại từ root (root sẽ recreate child app)
-argocd app sync root --grpc-web
-
-# Sau đó sync app cụ thể
-argocd app sync <app> --grpc-web
-```
-
-> **Cảnh báo:** `--cascade` xóa toàn bộ K8s resources do app đó quản lý.
-> PVC mặc định **không bị xóa** do `persistentVolumeReclaimPolicy: Retain`.
-
----
-
-### 10.6 Quản lý BigData (scale thủ công)
-
-HDFS yêu cầu scale theo thứ tự nhất định để tránh mất dữ liệu:
-
-```bash
-# Scale DOWN (phải theo thứ tự: worker → nodemanager → resourcemanager → namenode)
+# Scale DOWN (worker → nodemanager → resourcemanager → namenode)
 kubectl scale sts hadoop-datanode   -n bigdata --replicas=0
 kubectl scale sts spark-worker      -n bigdata --replicas=0
 kubectl scale deploy hadoop-nodemgr -n bigdata --replicas=0
 kubectl scale deploy hadoop-rmgr    -n bigdata --replicas=0
 kubectl scale sts hadoop-namenode   -n bigdata --replicas=0
 
-# Scale UP (ngược lại: namenode trước)
+# Scale UP (namenode trước)
 kubectl scale sts hadoop-namenode   -n bigdata --replicas=1
 kubectl scale deploy hadoop-rmgr    -n bigdata --replicas=1
 kubectl scale deploy hadoop-nodemgr -n bigdata --replicas=1
@@ -474,44 +177,96 @@ kubectl scale sts hadoop-datanode   -n bigdata --replicas=3
 kubectl scale sts spark-worker      -n bigdata --replicas=2
 ```
 
-> **Lưu ý:** Sau khi scale, ArgoCD sẽ thấy OutOfSync (vì replica count lệch với git).
-> Đây là hành vi mong muốn — **không sync** khi cluster đang ở trạng thái scale-down.
+> Sau khi scale, ArgoCD sẽ thấy OutOfSync. **Không sync** khi đang scale-down.
 
----
-
-### 10.7 Lấy token Headlamp
-
-Headlamp cần ServiceAccount token để đăng nhập:
-
+**Interactive PySpark:**
 ```bash
-kubectl create token headlamp -n kube-system --duration=8760h
+kubectl exec -it -n bigdata deploy/spark-master -- /opt/spark/bin/pyspark
 ```
-
-Dán token vào màn hình đăng nhập tại `https://headlamp.helios.id.vn`.
 
 ---
 
-### 10.8 CI/CD với GitHub Actions (NT118.Q22)
+## Hành vi khi node offline
 
-Repo `NT118.Q22` có workflow tự động build và cập nhật image tag trong `services/redshark/values.yaml`:
+| Tình huống | Kết quả |
+|-----------|---------|
+| Worker offline | Pod → Pending (hard anti-affinity, không reschedule) |
+| Scale về 0 | Pod bị xóa, **PVC giữ nguyên** |
+| Scale lại | Pod tái tạo, mount lại PVC cũ |
+| 1/3 master offline | Cụm vẫn hoạt động (quorum 2/3) |
+| 2/3 master offline | **Mất quorum**, chỉ đọc |
 
-**Luồng:**
+---
+
+## CI/CD — GitHub Actions (NT118.Q22)
+
 ```
-Push code lên NT118.Q22
+Push lên NT118.Q22
         ↓
-GitHub Actions build Docker image → push lên registry
+GitHub Actions build Docker image → push registry
         ↓
-Actions cập nhật image.tag trong k3s-homelab/services/redshark/values.yaml
+Actions cập nhật image.tag trong services/redshark/values.yaml
         ↓
-ArgoCD phát hiện OutOfSync → sync redshark app
+ArgoCD phát hiện OutOfSync → sync redshark
         ↓
-Cluster pull image mới và rolling update
+Cluster rolling update
 ```
 
-**Yêu cầu secret trong NT118.Q22 repo:**
+**Secret cần thiết trong repo NT118.Q22:**
 
-| Secret | Giá trị |
-|--------|---------|
+| Secret | Mô tả |
+|--------|-------|
 | `K3S_HOMELAB_PAT` | Fine-grained PAT trên repo `k3s-homelab` với quyền **Contents: Read and Write** |
 
-Tạo PAT tại: GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens.
+Tạo PAT: GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens.
+
+---
+
+## Cấu trúc thư mục
+
+```
+k3s-homelab/
+├── ck.sh                   # Chẩn đoán cụm
+├── init-sec.sh             # Khởi tạo infra-secrets (đọc từ .env)
+├── _lib.sh                 # Thư viện dùng chung (màu sắc, helpers)
+├── .env                    # Secrets — gitignored, tạo thủ công
+├── README.md               # Kiến trúc và hướng dẫn sử dụng
+├── SETUP.md                # Hướng dẫn khởi tạo cụm từ đầu
+├── argocd/
+│   └── kustomization.yaml  # Kustomize overlay: upstream install + control-plane affinity + insecure
+├── argocd-apps/            # ArgoCD Application manifests (app-of-apps)
+│   ├── root.yaml           # Root Application — theo dõi argocd-apps/
+│   ├── services.yaml       # ApplicationSet — cloudflared, logging, mssql, oracle, bigdata, redshark, sure
+│   ├── monitoring.yaml     # kube-prometheus-stack (multi-source)
+│   └── localstack.yaml     # LocalStack Pro (multi-source)
+├── services/               # Helm charts và values
+│   ├── bigdata/            # Chart: Hadoop + Spark
+│   ├── oracle/             # Chart: Oracle 19c
+│   ├── mssql/              # Chart: MSSQL 2025
+│   ├── logging/            # Chart: Loki + Alloy
+│   ├── monitoring/         # Values only: kube-prometheus-stack
+│   ├── cloudflared/        # Chart: Cloudflare Tunnel
+│   ├── localstack/         # Values only: localstack/localstack
+│   ├── sure/               # Raw K8s manifests
+│   └── redshark/           # Chart: RedShark API
+├── guides/                 # Tài liệu chi tiết từng dịch vụ
+│   ├── bigdata.md
+│   ├── distributed-database.md
+│   ├── monitoring.md
+│   ├── logging.md
+│   ├── cloudflared.md
+│   ├── localstack.md
+│   └── sure.md
+└── ck/                     # Thư mục xuất báo cáo (gitignored)
+```
+
+---
+
+## HA Notes
+
+- **Tối thiểu 3 master** để đảm bảo HA (etcd Raft quorum)
+- 1 master offline → cụm vẫn hoạt động (quorum 2/3)
+- 2 master offline → **mất quorum**, chỉ đọc
+- Latency giữa các master nên < 100ms
+- Worker offline **không ảnh hưởng** control plane
+- Token lấy tại: `sudo cat /var/lib/rancher/k3s/server/node-token` (trên bất kỳ master)
