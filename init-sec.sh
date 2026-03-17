@@ -1,5 +1,8 @@
 #!/bin/bash
 # =================================================================
+# DEPRECATED: Script nay chi dung lam fallback khan cap.
+# Luong chinh: generate sealed secrets qua SETUP.md buoc 3.6
+# =================================================================
 # init-sec.sh — Khoi tao infra-secrets va redshark-secrets
 # =================================================================
 # Su dung:

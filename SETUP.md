@@ -13,6 +13,7 @@ Cài đặt các công cụ sau trên máy quản lý trước khi bắt đầu:
 | `kubectl` | ≥ 1.30 | `curl -LO "https://dl.k8s.io/release/$(curl -sL https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" && chmod +x kubectl && sudo mv kubectl /usr/local/bin/` |
 | `helm` | ≥ 3.14 | `curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 \| bash` |
 | `argocd` CLI | v3.3.4 | `curl -sSL -o argocd-linux-amd64 https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64 && sudo install -m 555 argocd-linux-amd64 /usr/local/bin/argocd && rm argocd-linux-amd64` |
+| `kubeseal` | ≥ 0.36 | `KUBESEAL_VER=$(curl -s https://api.github.com/repos/bitnami-labs/sealed-secrets/releases/latest \| grep tag_name \| cut -d '"' -f4 \| sed 's/v//') && curl -sL "https://github.com/bitnami-labs/sealed-secrets/releases/download/v${KUBESEAL_VER}/kubeseal-${KUBESEAL_VER}-linux-amd64.tar.gz" \| tar xz && sudo install -m 755 kubeseal /usr/local/bin/kubeseal` |
 | `tailscale` | latest | `curl -fsSL https://tailscale.com/install.sh \| sh` |
 | `git` | any | package manager |
 | `base64`, `od` | (coreutils) | pre-installed trên hầu hết Linux |
@@ -22,6 +23,7 @@ Cài đặt các công cụ sau trên máy quản lý trước khi bắt đầu:
 ```bash
 helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
 helm repo add localstack https://helm.localstack.cloud
+helm repo add sealed-secrets https://bitnami-labs.github.io/sealed-secrets
 helm repo update
 ```
 
@@ -151,7 +153,9 @@ kubectl label node sinister \
 
 ## 2. Secrets (`.env`)
 
-Secrets **không được lưu trong Git**. Tạo file `.env` tại thư mục gốc repo:
+Secrets được quản lý qua **Sealed Secrets** (Bitnami) — encrypted YAML committed vào git, ArgoCD tự decrypt. File `.env` là nguồn gốc để tạo sealed secrets, **không được commit**.
+
+### 2.1 Tạo `.env`
 
 ```bash
 cat > .env << 'EOF'
@@ -177,17 +181,14 @@ SURE_POSTGRES_PASSWORD=<mật-khẩu-postgres-sure>
 REDSHARK_DB_USERNAME=<db-username-redshark>
 REDSHARK_DB_PASSWORD=<db-password-redshark>
 EOF
+
+# Tạo và lưu sure-secret-key-base ngay vào .env (phải ổn định qua mọi lần rebuild)
+echo "SURE_SECRET_KEY_BASE=$(head -c 64 /dev/urandom | od -An -tx1 | tr -d ' \n')" >> .env
 ```
 
-> `SURE_SECRET_KEY_BASE` được tự động tạo ngẫu nhiên bởi `init-sec.sh` và giữ nguyên qua các lần chạy.
+> **Lưu file `.env` ở nơi an toàn** (password manager, encrypted backup) — đây là nguồn duy nhất để tái tạo sealed secrets khi rebuild cluster.
 
-### Khởi tạo secrets vào cluster
-
-```bash
-./init-sec.sh
-```
-
-Script tạo hai loại secret:
+### 2.2 Tham chiếu key mapping
 
 **`infra-secrets`** — trong các namespace: `cloudflared`, `localstack`, `monitoring`, `mssql`, `oracle`, `sure`, `kube-system`
 
@@ -196,11 +197,11 @@ Script tạo hai loại secret:
 | `cloudflare-token` | `CLOUDFLARE_TOKEN` | cloudflared |
 | `localstack-token` | `LOCALSTACK_TOKEN` | localstack |
 | `grafana-admin-password` | `GRAFANA_ADMIN_PASSWORD` | monitoring |
-| `admin-user` / `admin-password` | `GRAFANA_ADMIN_PASSWORD` | monitoring (existingSecret) |
+| `admin-user` / `admin-password` | hardcoded `admin` / `GRAFANA_ADMIN_PASSWORD` | monitoring (existingSecret) |
 | `mssql-password` | `MSSQL_PASSWORD` | mssql |
 | `oracle-password` | `ORACLE_PASSWORD` | oracle |
 | `sure-postgres-password` | `SURE_POSTGRES_PASSWORD` | sure |
-| `sure-secret-key-base` | auto-generated | sure (Rails, preserved qua các lần chạy) |
+| `sure-secret-key-base` | `SURE_SECRET_KEY_BASE` | sure (Rails, tạo một lần trong `.env`) |
 
 **`redshark-secrets`** — chỉ trong namespace `redshark`
 
@@ -209,11 +210,7 @@ Script tạo hai loại secret:
 | `db-username` | `REDSHARK_DB_USERNAME` | redshark API |
 | `db-password` | `REDSHARK_DB_PASSWORD` | redshark API |
 
-```bash
-# Kiểm tra
-kubectl get secret infra-secrets -n monitoring \
-    -o jsonpath='{.data.grafana-admin-password}' | base64 -d
-```
+> **Generate sealed secrets** được thực hiện ở **bước 3.6**, sau khi Sealed Secrets controller đã chạy.
 
 ---
 
@@ -285,6 +282,9 @@ argocd repo add git@github.com:helios-ryuu/k3s-homelab.git \
 # Helm repos (ArgoCD cần đăng ký riêng, khác với `helm repo add`)
 argocd repo add https://kubernetes-sigs.github.io/headlamp/ \
     --type helm --name headlamp --grpc-web
+
+argocd repo add https://bitnami-labs.github.io/sealed-secrets \
+    --type helm --name sealed-secrets --grpc-web
 ```
 
 ### 3.5 Apply root Application
@@ -293,9 +293,84 @@ argocd repo add https://kubernetes-sigs.github.io/headlamp/ \
 kubectl apply -n argocd -f argocd-apps/root.yaml
 ```
 
-Trao quyền quản lý toàn bộ apps cho ArgoCD. Từ đây ArgoCD tự động sync khi có thay đổi trong Git.
+Trao quyền quản lý toàn bộ apps cho ArgoCD. ArgoCD sync theo thứ tự wave:
+- **Wave -2**: `sealed-secrets` controller → `kube-system`
+- **Wave -1**: `secrets` (SealedSecret objects) → decrypt thành K8s Secrets
+- **Wave 0**: tất cả apps còn lại
 
-### 3.6 Sync cloudflared và đóng port-forward
+### 3.6 Generate và commit Sealed Secrets
+
+Đợi sealed-secrets controller sẵn sàng:
+
+```bash
+argocd app sync sealed-secrets --grpc-web
+argocd app wait sealed-secrets --health --grpc-web
+kubectl rollout status deployment sealed-secrets-controller -n kube-system
+```
+
+Load `.env` và generate SealedSecret files:
+
+```bash
+source .env
+
+# infra-secrets — 7 namespaces
+for NS in cloudflared localstack monitoring mssql oracle sure kube-system; do
+    kubectl create secret generic infra-secrets \
+        --from-literal=cloudflare-token="$CLOUDFLARE_TOKEN" \
+        --from-literal=localstack-token="$LOCALSTACK_TOKEN" \
+        --from-literal=grafana-admin-password="$GRAFANA_ADMIN_PASSWORD" \
+        --from-literal=admin-user="admin" \
+        --from-literal=admin-password="$GRAFANA_ADMIN_PASSWORD" \
+        --from-literal=mssql-password="$MSSQL_PASSWORD" \
+        --from-literal=oracle-password="$ORACLE_PASSWORD" \
+        --from-literal=sure-secret-key-base="$SURE_SECRET_KEY_BASE" \
+        --from-literal=sure-postgres-password="$SURE_POSTGRES_PASSWORD" \
+        -n "$NS" --dry-run=client -o yaml \
+    | kubeseal \
+        --controller-name=sealed-secrets-controller \
+        --controller-namespace=kube-system \
+        --format yaml --namespace "$NS" \
+    > "secrets/infra-secrets-${NS}.yaml"
+done
+
+# redshark-secrets
+kubectl create secret generic redshark-secrets \
+    --from-literal=db-username="$REDSHARK_DB_USERNAME" \
+    --from-literal=db-password="$REDSHARK_DB_PASSWORD" \
+    -n redshark --dry-run=client -o yaml \
+| kubeseal \
+    --controller-name=sealed-secrets-controller \
+    --controller-namespace=kube-system \
+    --format yaml --namespace redshark \
+> secrets/redshark-secrets-redshark.yaml
+```
+
+Commit và push:
+
+```bash
+git add secrets/
+git commit -m "secrets: add sealed secrets"
+git push
+```
+
+ArgoCD tự sync app `secrets` → controller decrypt → K8s Secrets tồn tại trong từng namespace. Kiểm tra:
+
+```bash
+kubectl get sealedsecret -A
+kubectl get secret infra-secrets -n monitoring
+kubectl get secret redshark-secrets -n redshark
+```
+
+**Backup controller key ngay** (cần để rebuild cluster mà không re-seal):
+
+```bash
+kubectl get secret -n kube-system \
+    -l sealedsecrets.bitnami.com/sealed-secrets-key \
+    -o yaml > sealed-secrets-key-backup.yaml
+# Lưu cùng với .env — KHÔNG commit lên git
+```
+
+### 3.7 Sync cloudflared và đóng port-forward
 
 Sync cloudflared qua port-forward trước, sau đó tunnel sẽ lên và các lệnh tiếp theo dùng được domain:
 
@@ -305,6 +380,61 @@ argocd app wait cloudflared --health --grpc-web
 ```
 
 Kiểm tra tunnel đã sống: `curl -sf https://argocd.helios.id.vn/healthz`
+
+---
+
+## 3.8 Cập nhật secrets
+
+Khi cần thay đổi giá trị (ví dụ rotate token):
+
+```bash
+vi .env   # Sửa giá trị cần thay
+source .env
+
+# Re-seal namespace cụ thể, ví dụ cloudflared:
+kubectl create secret generic infra-secrets \
+    --from-literal=cloudflare-token="$CLOUDFLARE_TOKEN" \
+    --from-literal=localstack-token="$LOCALSTACK_TOKEN" \
+    --from-literal=grafana-admin-password="$GRAFANA_ADMIN_PASSWORD" \
+    --from-literal=admin-user="admin" \
+    --from-literal=admin-password="$GRAFANA_ADMIN_PASSWORD" \
+    --from-literal=mssql-password="$MSSQL_PASSWORD" \
+    --from-literal=oracle-password="$ORACLE_PASSWORD" \
+    --from-literal=sure-secret-key-base="$SURE_SECRET_KEY_BASE" \
+    --from-literal=sure-postgres-password="$SURE_POSTGRES_PASSWORD" \
+    -n cloudflared --dry-run=client -o yaml \
+| kubeseal \
+    --controller-name=sealed-secrets-controller \
+    --controller-namespace=kube-system \
+    --format yaml --namespace cloudflared \
+> secrets/infra-secrets-cloudflared.yaml
+
+git add secrets/ && git commit -m "secrets: rotate <key-name>" && git push
+# ArgoCD sync tự động — pods restart nếu cần
+```
+
+## 3.9 Rebuild cluster (restore sealed secrets)
+
+Khi rebuild từ đầu mà đã có `sealed-secrets-key-backup.yaml`:
+
+```bash
+# 1. Restore controller key TRƯỚC khi apply ArgoCD
+kubectl create namespace kube-system 2>/dev/null || true
+kubectl apply -f sealed-secrets-key-backup.yaml
+
+# 2. Tiếp tục bootstrap bình thường từ bước 3.1
+# Controller sẽ tìm key cũ — không cần chạy lại kubeseal
+```
+
+> Nếu mất `sealed-secrets-key-backup.yaml`: chạy lại toàn bộ bước 3.6 để re-seal từ `.env`.
+
+### Fallback khẩn cấp
+
+Tạo secrets trực tiếp mà không qua GitOps (ví dụ khi controller chưa sẵn sàng):
+
+```bash
+./init-sec.sh
+```
 
 ---
 
