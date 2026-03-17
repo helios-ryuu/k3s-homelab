@@ -1,56 +1,20 @@
 #!/bin/bash
 # =================================================================
-# bigdata.sh — Quản lý BigData (Hadoop + Spark)
+# bigdata.sh — BigData Special Operations (Hadoop + Spark)
 # =================================================================
 # Sử dụng:
-#   bash bigdata.sh deploy          Deploy / Upgrade
-#   bash bigdata.sh delete          Force xóa
-#   bash bigdata.sh redeploy        Delete + Deploy
-#   bash bigdata.sh scale <N>       Scale workers (0 = tắt toàn bộ)
+#   bash bigdata.sh scale <N>       Scale workers (HDFS ordering is critical)
 #   bash bigdata.sh logs            Tail logs NameNode
 #   bash bigdata.sh check           Health check cụm BigData
+# =================================================================
+# Deploy/delete/redeploy: managed by ArgoCD
+#   argocd app sync bigdata
+#   argocd app delete bigdata --cascade
 # =================================================================
 
 source "$(dirname "${BASH_SOURCE[0]}")/../_lib.sh"
 
 NS="bigdata"
-
-# ======================== DEPLOY ========================
-
-do_deploy() {
-    check_node_labels bigdata
-    if ! check_secrets bigdata "$NS" quiet; then
-        bash "$K3S_DIR/init-sec.sh" "$NS"
-    fi
-    check_secrets bigdata "$NS"
-
-    # Count worker nodes for replica count
-    local worker_count
-    worker_count=$(kubectl get nodes -l node-role.kubernetes.io/bigdata-worker=true --no-headers 2>/dev/null | grep -c .)
-    [ "$worker_count" -eq 0 ] && worker_count=2
-    info "Deploy BigData (Hadoop + Spark) → namespace: $NS  (workers: $worker_count)"
-
-    # Update workers.replicas in values.yaml
-    sed -i "s/^  replicas: .*/  replicas: $worker_count/" "$K3S_DIR/services/bigdata/values.yaml"
-
-    if release_exists bigd $NS; then
-        ok "(Upgrade existing release)"
-        helm upgrade bigd "$K3S_DIR/services/bigdata" -n $NS $HELM_TIMEOUT
-    else
-        helm install bigd "$K3S_DIR/services/bigdata" -n $NS --create-namespace $HELM_TIMEOUT
-    fi
-    wait_for_ready $NS
-}
-
-# ======================== DELETE ========================
-
-do_delete() {
-    info "Force xóa BigData..."
-    helm uninstall bigd -n $NS 2>/dev/null || true
-    # Also delete the standalone NameNode PVC (not in a StatefulSet volumeClaimTemplate)
-    kubectl patch pvc hadoop-namenode-pvc -n $NS -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null || true
-    force_cleanup_ns $NS
-}
 
 # ======================== SCALE ========================
 
@@ -410,23 +374,21 @@ print('OK' if r.returncode == 0 or 'version' in r.stderr.lower() else 'FAIL')
 
 ACTION="${1:-}"
 case "$ACTION" in
-    deploy)   do_deploy ;;
-    delete)   do_delete ;;
-    redeploy) do_delete; sleep 5; do_deploy ;;
     scale)    do_scale "$2" ;;
     logs)     do_logs ;;
     check)    do_check ;;
     *)
-        echo -e "${YELLOW}bigdata.sh — Quản lý BigData (Hadoop + Spark)${NC}"
+        echo -e "${YELLOW}bigdata.sh — BigData Special Operations (Hadoop + Spark)${NC}"
         echo ""
         echo "Cú pháp: $0 <action> [args]"
         echo ""
         echo "Actions:"
-        echo -e "  ${GREEN}deploy${NC}       Deploy / Upgrade"
-        echo -e "  ${RED}delete${NC}       Force xóa"
-        echo -e "  ${YELLOW}redeploy${NC}     Delete + Deploy lại sạch"
-        echo -e "  ${BLUE}scale${NC} <N>    Scale workers (0 = tắt toàn bộ)"
+        echo -e "  ${BLUE}scale${NC} <N>    Scale workers (0 = tắt toàn bộ) — HDFS ordering is critical"
         echo -e "  ${CYAN}logs${NC}         Tail logs NameNode"
         echo -e "  ${CYAN}check${NC}        Health check cụm BigData"
+        echo ""
+        echo "Deploy/delete/redeploy → ArgoCD:"
+        echo "  argocd app sync bigdata"
+        echo "  argocd app delete bigdata --cascade"
         ;;
 esac

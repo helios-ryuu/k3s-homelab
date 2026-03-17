@@ -1,0 +1,35 @@
+# =================================================================
+# Headlamp — Helm values
+# Translates --set flags from svc-scripts/headlamp.sh
+# =================================================================
+
+replicaCount: 1
+
+config:
+  inCluster: true
+
+service:
+  type: ClusterIP
+  port: 80
+
+tolerations:
+  - key: node-role.kubernetes.io/control-plane
+    operator: Exists
+    effect: NoSchedule
+
+affinity:
+  nodeAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        preference:
+          matchExpressions:
+            - key: node-role.kubernetes.io/control-plane
+              operator: Exists
+
+resources:
+  requests:
+    memory: 64Mi
+    cpu: 50m
+  limits:
+    memory: 128Mi
+    cpu: 100m

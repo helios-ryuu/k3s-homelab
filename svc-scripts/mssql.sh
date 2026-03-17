@@ -1,14 +1,13 @@
 #!/bin/bash
 # =================================================================
-# mssql.sh — Quản lý MSSQL Server
+# mssql.sh — MSSQL Special Operations
 # =================================================================
 # Sử dụng:
-#   bash mssql.sh deploy          Deploy / Upgrade
-#   bash mssql.sh delete          Force xóa
-#   bash mssql.sh redeploy        Delete + Deploy
-#   bash mssql.sh scale <N>       Scale replicas
-#   bash mssql.sh logs            Tail logs
 #   bash mssql.sh check           Health check MSSQL
+# =================================================================
+# Deploy/delete/redeploy: managed by ArgoCD
+#   argocd app sync mssql
+#   argocd app delete mssql --cascade
 # =================================================================
 
 source "$(dirname "${BASH_SOURCE[0]}")/../_lib.sh"
@@ -16,80 +15,6 @@ source "$(dirname "${BASH_SOURCE[0]}")/../_lib.sh"
 MSSQL_NS="mssql"
 MSSQL_PWD="MSSQLServer@2026"
 SQLCMD="/opt/mssql-tools18/bin/sqlcmd"
-
-# ======================== DEPLOY ========================
-
-do_deploy() {
-    check_node_labels mssql
-    if ! check_secrets mssql "$MSSQL_NS" quiet; then
-        bash "$K3S_DIR/init-sec.sh" "$MSSQL_NS"
-    fi
-    check_secrets mssql "$MSSQL_NS"
-
-    # Count labeled nodes → set replicas dynamically
-    local node_count
-    node_count=$(kubectl get nodes -l node-role.kubernetes.io/database-mssql=true --no-headers 2>/dev/null | grep -c .)
-    info "Deploy MSSQL → namespace: $MSSQL_NS  (replicas: $node_count nodes)"
-
-    # Reset nodeSelector and replicas in values.yaml
-    sed -i '/^nodeSelector:/,/^[^ ]/d' "$K3S_DIR/services/mssql/values.yaml"
-    printf "nodeSelector:\n  node-role.kubernetes.io/database-mssql: \"true\"\n" >> "$K3S_DIR/services/mssql/values.yaml"
-    sed -i "s/^replicas: .*/replicas: $node_count/" "$K3S_DIR/services/mssql/values.yaml"
-
-    if release_exists mssql $MSSQL_NS; then
-        ok "(Upgrade existing release)"
-        helm upgrade mssql "$K3S_DIR/services/mssql" -n $MSSQL_NS $HELM_TIMEOUT
-    else
-        helm install mssql "$K3S_DIR/services/mssql" -n $MSSQL_NS --create-namespace $HELM_TIMEOUT
-    fi
-    wait_for_ready $MSSQL_NS
-}
-
-# ======================== DELETE ========================
-
-do_delete() {
-    if [[ "$1" == "node" && -n "$2" ]]; then
-        local del_node="$2"
-        info "Xóa MSSQL trên node $del_node..."
-        pod_name=$(kubectl get pod -n $MSSQL_NS -o json | jq -r ".items[] | select(.spec.nodeName==\"$del_node\") | .metadata.name")
-        if [ -n "$pod_name" ]; then
-            kubectl patch pod "$pod_name" -n $MSSQL_NS -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null || true
-            kubectl delete pod "$pod_name" -n $MSSQL_NS $FORCE
-            pvc_name=$(kubectl get pvc -n $MSSQL_NS -o json | jq -r ".items[] | select(.metadata.name | test(\"$pod_name\")) | .metadata.name")
-            if [ -n "$pvc_name" ]; then
-                kubectl patch pvc "$pvc_name" -n $MSSQL_NS -p '{"metadata":{"finalizers":[]}}' --type=merge 2>/dev/null || true
-                kubectl delete pvc "$pvc_name" -n $MSSQL_NS $FORCE
-            fi
-            ok "Đã xóa pod và PVC trên node $del_node"
-        else
-            warn "Không tìm thấy pod MSSQL trên node $del_node"
-        fi
-    else
-        info "Force xóa MSSQL..."
-        helm uninstall mssql -n $MSSQL_NS 2>/dev/null || true
-        force_cleanup_ns $MSSQL_NS
-    fi
-}
-
-# ======================== SCALE ========================
-
-do_scale() {
-    local replicas="$1"
-    if [ -z "$replicas" ]; then
-        err "Thiếu số replicas"
-        echo "    Cú pháp: $0 scale <N>"
-        exit 1
-    fi
-    info "Scale MSSQL → $replicas"
-    helm upgrade mssql "$K3S_DIR/services/mssql" -n $MSSQL_NS --set replicas="$replicas" $HELM_TIMEOUT
-    wait_for_ready $MSSQL_NS
-}
-
-# ======================== LOGS ========================
-
-do_logs() {
-    kubectl logs -f -n $MSSQL_NS -l app=mssql -c mssql-engine --tail=100
-}
 
 # ======================== CHECK ========================
 
@@ -229,7 +154,7 @@ do_check() {
     if [ "$FAIL" -gt 0 ]; then
         echo ""
         echo -e "  ${CYAN}Gợi ý sửa lỗi:${NC}"
-        echo "    - Pod MISSING: chạy 'bash mssql.sh deploy'"
+        echo "    - Pod MISSING: argocd app sync mssql"
         echo "    - Pod Pending: Worker node offline, chờ node online hoặc scale down"
         echo "    - MSSQL sqlcmd lỗi: Kiểm tra init sidecar logs 'kubectl logs -n mssql mssql-db-X -c mssql-init'"
         echo "    - Cross-instance thất bại: Kiểm tra DNS headless service + network policy"
@@ -240,23 +165,17 @@ do_check() {
 
 ACTION="${1:-}"
 case "$ACTION" in
-    deploy)   do_deploy ;;
-    delete)   do_delete ;;
-    redeploy) do_delete; sleep 5; do_deploy ;;
-    scale)    do_scale "$2" ;;
-    logs)     do_logs ;;
     check)    do_check ;;
     *)
-        echo -e "${YELLOW}mssql.sh — Quản lý MSSQL Server${NC}"
+        echo -e "${YELLOW}mssql.sh — MSSQL Special Operations${NC}"
         echo ""
-        echo "Cú pháp: $0 <action> [args]"
+        echo "Cú pháp: $0 <action>"
         echo ""
         echo "Actions:"
-        echo -e "  ${GREEN}deploy${NC}       Deploy / Upgrade"
-        echo -e "  ${RED}delete${NC}       Force xóa"
-        echo -e "  ${YELLOW}redeploy${NC}     Delete + Deploy lại sạch"
-        echo -e "  ${BLUE}scale${NC} <N>    Scale replicas"
-        echo -e "  ${CYAN}logs${NC}         Tail logs"
         echo -e "  ${CYAN}check${NC}        Health check MSSQL"
+        echo ""
+        echo "Deploy/delete/redeploy → ArgoCD:"
+        echo "  argocd app sync mssql"
+        echo "  argocd app delete mssql --cascade"
         ;;
 esac

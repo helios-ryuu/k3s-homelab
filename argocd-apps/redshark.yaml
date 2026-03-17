@@ -1,0 +1,20 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: redshark
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: git@github.com:helios-ryuu/k3s-homelab.git
+    targetRevision: main
+    path: services/redshark
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: redshark
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=true
+    # automated:
+    #   prune: false
+    #   selfHeal: true

@@ -1,0 +1,26 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: headlamp
+  namespace: argocd
+spec:
+  project: default
+  sources:
+    - repoURL: https://headlamp-k8s.github.io/headlamp/
+      chart: headlamp
+      targetRevision: "0.x"
+      helm:
+        valueFiles:
+          - $values/services/headlamp/values.yaml
+    - repoURL: git@github.com:helios-ryuu/k3s-homelab.git
+      targetRevision: main
+      ref: values
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kube-system
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=true
+    # automated:
+    #   prune: false
+    #   selfHeal: true

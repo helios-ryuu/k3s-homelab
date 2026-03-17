@@ -1,109 +1,18 @@
 #!/bin/bash
 # =================================================================
-# localstack.sh — Manage LocalStack Pro
+# localstack.sh — LocalStack Special Operations
 # =================================================================
 # Usage:
-#   bash localstack.sh deploy          Deploy / Upgrade
-#   bash localstack.sh delete          Force delete
-#   bash localstack.sh redeploy        Delete + Deploy
-#   bash localstack.sh logs            Tail logs
-#   bash localstack.sh check           Health check
+#   bash localstack.sh check           Health check (smoke tests + diagnostics)
+# =================================================================
+# Deploy/delete/redeploy: managed by ArgoCD
+#   argocd app sync localstack
+#   argocd app delete localstack --cascade
 # =================================================================
 
 source "$(dirname "${BASH_SOURCE[0]}")/../_lib.sh"
 
 LS_NS="localstack"
-
-# ======================== DEPLOY ========================
-
-do_deploy() {
-    info "Deploy LocalStack Pro → namespace: $LS_NS"
-
-    # Verify the Pro image is reachable before pulling (saves time on bad tokens/network)
-    local ls_image ls_tag
-    ls_image=$(grep 'repository:' "$K3S_DIR/services/localstack/values.yaml" | head -1 | awk '{print $2}')
-    ls_tag=$(grep '  tag:' "$K3S_DIR/services/localstack/values.yaml" | head -1 | awk '{print $2}' | tr -d '"')
-    info "Checking image ${ls_image}:${ls_tag} on registry..."
-    if timeout 15 docker manifest inspect "${ls_image}:${ls_tag}" &>/dev/null; then
-        ok "Image ${ls_image}:${ls_tag} accessible (pullPolicy:Always → will pull on deploy)"
-    else
-        warn "Cannot reach ${ls_image}:${ls_tag} — registry unreachable or image missing"
-        echo -e "      ${CYAN}Manual check: docker manifest inspect ${ls_image}:${ls_tag}${NC}"
-        read -p "      Continue deploy anyway? (y/N): " confirm
-        if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
-            warn "Deploy cancelled."
-            return 1
-        fi
-    fi
-
-    check_node_labels localstack
-    if ! check_secrets localstack "$LS_NS" quiet; then
-        bash "$K3S_DIR/init-sec.sh" "$LS_NS"
-    fi
-    check_secrets localstack "$LS_NS"
-
-    # Verify target node is Ready before deploying
-    local target_node
-    target_node=$(kubectl get nodes -l node-role.kubernetes.io/localstack -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-    if [ -z "$target_node" ]; then
-        target_node=$(kubectl get nodes -l node-role.kubernetes.io/control-plane -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-    fi
-
-    if [ -n "$target_node" ]; then
-        local node_status
-        node_status=$(kubectl get node "$target_node" --no-headers 2>/dev/null | awk '{print $2}')
-        if [ "$node_status" != "Ready" ]; then
-            warn "Node $target_node not Ready (status: ${node_status:-NotFound})"
-            read -p "      Continue? (y/N): " confirm
-            if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
-                warn "Deploy cancelled."
-                return 1
-            fi
-        else
-            ok "Node $target_node: Ready"
-        fi
-    fi
-
-    if release_exists localstack $LS_NS; then
-        ok "(Upgrading existing release)"
-        helm upgrade localstack localstack/localstack \
-            -f "$K3S_DIR/services/localstack/values.yaml" -n $LS_NS $HELM_TIMEOUT
-    else
-        helm install localstack localstack/localstack \
-            -f "$K3S_DIR/services/localstack/values.yaml" \
-            -n $LS_NS --create-namespace $HELM_TIMEOUT
-    fi
-
-    wait_for_ready $LS_NS
-
-    local ls_node_ip
-    ls_node_ip=$(kubectl get nodes -l node-role.kubernetes.io/localstack \
-        -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null || \
-        kubectl get nodes -l node-role.kubernetes.io/control-plane \
-        -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null || \
-        echo "127.0.0.1")
-
-    ok "LocalStack API (external): http://${ls_node_ip}:30566"
-    ok "LocalStack API (cluster):  http://localstack.localstack.svc.cluster.local:4566"
-    echo ""
-    echo -e "  ${CYAN}Quick test (from any node):${NC}"
-    echo "    awslocal --endpoint-url=http://${ls_node_ip}:30566 s3 ls"
-    echo "    awslocal --endpoint-url=http://${ls_node_ip}:30566 dynamodb list-tables"
-}
-
-# ======================== DELETE ========================
-
-do_delete() {
-    info "Force deleting LocalStack..."
-    helm uninstall localstack -n $LS_NS 2>/dev/null
-    force_cleanup_ns $LS_NS
-}
-
-# ======================== LOGS ========================
-
-do_logs() {
-    kubectl logs -f -n $LS_NS -l app.kubernetes.io/name=localstack --tail=100
-}
 
 # ======================== CHECK ========================
 
@@ -331,7 +240,7 @@ for name, status in sorted(enabled.items()):
     if [ "$FAIL" -gt 0 ]; then
         echo ""
         echo -e "  ${CYAN}Troubleshooting:${NC}"
-        echo "    Pod missing:          bash localstack.sh deploy"
+        echo "    Pod missing:          argocd app sync localstack"
         echo "    API not responding:   pod may still be starting (allow 30-60s)"
         echo "    Edition not Pro:      check LOCALSTACK_AUTH_TOKEN in infra-secrets"
         echo "    Lambda/DinD fail:     do NOT set DOCKER_HOST in values.yaml (chart auto-sets it)"
@@ -343,21 +252,17 @@ for name, status in sorted(enabled.items()):
 
 ACTION="${1:-}"
 case "$ACTION" in
-    deploy)   do_deploy ;;
-    delete)   do_delete ;;
-    redeploy) do_delete; sleep 5; do_deploy ;;
-    logs)     do_logs ;;
     check)    do_check ;;
     *)
-        echo -e "${YELLOW}localstack.sh — Manage LocalStack Pro${NC}"
+        echo -e "${YELLOW}localstack.sh — LocalStack Special Operations${NC}"
         echo ""
         echo "Usage: $0 <action>"
         echo ""
         echo "Actions:"
-        echo -e "  ${GREEN}deploy${NC}       Deploy / Upgrade"
-        echo -e "  ${RED}delete${NC}       Force delete"
-        echo -e "  ${YELLOW}redeploy${NC}     Delete + re-deploy clean"
-        echo -e "  ${CYAN}logs${NC}         Tail logs"
-        echo -e "  ${CYAN}check${NC}        Health check (API + services + smoke tests)"
+        echo -e "  ${CYAN}check${NC}        Health check (smoke tests + diagnostics)"
+        echo ""
+        echo "Deploy/delete/redeploy → ArgoCD:"
+        echo "  argocd app sync localstack"
+        echo "  argocd app delete localstack --cascade"
         ;;
 esac

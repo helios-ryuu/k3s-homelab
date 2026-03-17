@@ -1,0 +1,20 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: bigdata
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: git@github.com:helios-ryuu/k3s-homelab.git
+    targetRevision: main
+    path: services/bigdata
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: bigdata
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=true
+    # automated:
+    #   prune: false
+    #   selfHeal: true

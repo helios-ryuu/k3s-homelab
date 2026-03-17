@@ -1,7 +1,7 @@
 # K3S Homelab — Distributed Systems Education Cluster
 
 > **5 nodes** via Tailscale mesh VPN — 3 master (HA embedded etcd) + 2 worker
-> Management: `k3s.sh` · Diagnostics: `ck.sh` · Secrets: `init-sec.sh`
+> Management: ArgoCD · Diagnostics: `ck.sh` · Secrets: `init-sec.sh`
 
 ---
 
@@ -38,44 +38,49 @@ kubectl label node <node> app-host=sure
 
 ---
 
-## 2. Cluster Management (`k3s.sh`)
+## 2. Cluster Management (ArgoCD)
+
+Deployments are managed by **ArgoCD** using the app-of-apps pattern. Use ArgoCD CLI or the web UI at `https://argocd.helios.id.vn`.
+
+| Old (`k3s.sh`) | New (ArgoCD) |
+|---|---|
+| `./k3s.sh deploy <svc>` | `argocd app sync <svc>` |
+| `./k3s.sh deploy all` | `argocd app sync --selector argocd.argoproj.io/app-set=root` |
+| `./k3s.sh delete <svc>` | `argocd app delete <svc> --cascade` |
+| `./k3s.sh redeploy <svc>` | `argocd app delete <svc> --cascade && argocd app sync <svc>` |
+| `./k3s.sh status` | `argocd app list` |
+| `./k3s.sh health` | `argocd app get <svc>` + `./ck.sh` |
+| `./k3s.sh nuke` | `argocd app delete root --cascade` + `kubectl delete namespace argocd` |
+
+### Special Operations (ArgoCD cannot do these)
 
 ```bash
-./k3s.sh deploy   [target|all]   # Deploy (install or upgrade)
-./k3s.sh delete   [target|all]   # Force delete (pods, PVC, namespace)
-./k3s.sh redeploy [target|all]   # Delete + deploy clean
-./k3s.sh scale    <target> <N>   # Scale workers/replicas
-./k3s.sh logs     <target>       # Tail main pod logs
-./k3s.sh check    <target>       # Component health check
-./k3s.sh status                  # Cluster overview (nodes, helm, pods, PVC)
-./k3s.sh health                  # Global health check + fault tolerance
-./k3s.sh nuke                    # DELETE EVERYTHING including PVC
+./svc-scripts/bigdata.sh scale [0|1|2|3]   # Scale workers (HDFS ordering is critical)
+./svc-scripts/sure.sh setup                 # Rails DB migrations
+./svc-scripts/headlamp.sh token             # Generate Headlamp auth token
+./svc-scripts/<svc>.sh check               # Component diagnostics
 ```
 
-**Targets:** `bigdata`, `oracle`, `mssql`, `localstack`, `logging`, `monitoring`, `cloudflared`, `headlamp`, `sure`
-
-| Action | Description |
-|--------|-------------|
-| `deploy` | `helm install` (first time) or `helm upgrade` (existing) |
-| `delete` | Force delete everything (pods, PVC, CRDs, namespace) |
-| `redeploy` | `delete` + `deploy` clean |
-| `scale N` | Change replicas (0 = shutdown, PVC preserved) |
-| `check` | Per-component health check with detailed diagnostics |
-
-### Per-Component Scripts
-
-Each component has its own script in `svc-scripts/` with the same interface plus component-specific commands:
+### ArgoCD Bootstrap (one-time)
 
 ```bash
-./svc-scripts/bigdata.sh scale [0|1|2|3]    # Scale workers (workers before masters)
-./svc-scripts/bigdata.sh check              # 6-section BigData health check
-./svc-scripts/oracle.sh check               # 4-section Oracle health check
-./svc-scripts/mssql.sh check                # 4-section MSSQL health check
-./svc-scripts/monitoring.sh check           # 5-section monitoring stack check
-./svc-scripts/localstack.sh check           # 5-section LocalStack check (with smoke tests)
-./svc-scripts/sure.sh setup                 # Rails DB migrations
-./svc-scripts/sure.sh check                 # 4-section Sure health check
-./svc-scripts/headlamp.sh token             # Create permanent auth token
+# Full bootstrap: install ArgoCD + register repo + apply root app
+bash svc-scripts/argocd.sh bootstrap
+
+# Or step by step:
+bash svc-scripts/argocd.sh install
+bash svc-scripts/argocd.sh login
+bash svc-scripts/argocd.sh add-repo
+bash svc-scripts/argocd.sh apply-root
+
+# Sync order (ArgoCD UI at https://argocd.helios.id.vn or CLI)
+argocd app sync cloudflared
+argocd app sync logging
+argocd app sync monitoring
+argocd app sync localstack
+argocd app sync redshark
+argocd app sync sure
+# ... rest
 ```
 
 ### Offline Node Behavior
@@ -269,12 +274,23 @@ Use the "Add Master" command from section 7.
 
 ```
 k3s-homelab/
-├── k3s.sh                  # Main dispatcher (deploy/scale/delete/health)
 ├── ck.sh                   # Cluster diagnostics (7 sections + export)
 ├── init-sec.sh             # Secret initialization (all namespaces)
 ├── _lib.sh                 # Shared helpers (colors, kubectl wrappers, IP detection)
 ├── README.md               # This file
 ├── CLAUDE.md               # AI assistant instructions
+├── argocd-apps/            # ArgoCD Application manifests (app-of-apps)
+│   ├── root.yaml           # Root Application — watches argocd-apps/
+│   ├── redshark.yaml       # RedShark API
+│   ├── monitoring.yaml     # kube-prometheus-stack (multi-source)
+│   ├── logging.yaml        # Loki + Alloy
+│   ├── localstack.yaml     # LocalStack Pro (multi-source)
+│   ├── cloudflared.yaml    # Cloudflare Tunnel
+│   ├── headlamp.yaml       # Headlamp K8s Dashboard (multi-source)
+│   ├── sure.yaml           # Sure Finance App (raw manifests)
+│   ├── bigdata.yaml        # Hadoop + Spark
+│   ├── oracle.yaml         # Oracle 19c
+│   └── mssql.yaml          # MSSQL 2025
 ├── guides/                 # Service documentation
 │   ├── bigdata.md          # Hadoop + Spark guide
 │   ├── distributed-database.md  # Oracle + MSSQL guide
@@ -284,24 +300,27 @@ k3s-homelab/
 │   ├── localstack.md       # LocalStack Pro guide
 │   ├── sure.md             # Sure Finance App guide
 │   └── headlamp.md         # Headlamp K8s Dashboard guide
-├── svc-scripts/            # Component scripts
-│   ├── bigdata.sh          # BigData (deploy/scale/check)
-│   ├── oracle.sh           # Oracle (deploy/scale/check)
-│   ├── mssql.sh            # MSSQL (deploy/scale/check)
-│   ├── monitoring.sh       # Monitoring (deploy/check)
-│   ├── logging.sh          # Logging (deploy/logs)
-│   ├── localstack.sh       # LocalStack (deploy/check)
-│   ├── cfd.sh              # Cloudflare Tunnel (deploy)
-│   ├── sure.sh             # Sure (deploy/setup/check)
-│   └── headlamp.sh         # Headlamp (deploy/token)
-├── bigdata/                # Helm chart: Hadoop + Spark
-├── oracle/                 # Helm chart: Oracle 19c
-├── mssql/                  # Helm chart: MSSQL 2025
-├── logging/                # Helm chart: Loki + Alloy
-├── monitoring/             # Values: kube-prometheus-stack
-├── cloudflared/            # Helm chart: Cloudflare Tunnel
-├── localstack/             # Values: localstack/localstack
-├── sure/                   # Raw K8s manifests
+├── svc-scripts/            # Special operations scripts (ArgoCD cannot do these)
+│   ├── argocd.sh           # ArgoCD bootstrap helper
+│   ├── bigdata.sh          # BigData: scale (HDFS ordering), check
+│   ├── oracle.sh           # Oracle: check
+│   ├── mssql.sh            # MSSQL: check
+│   ├── monitoring.sh       # Monitoring: check
+│   ├── logging.sh          # Logging: logs
+│   ├── localstack.sh       # LocalStack: check (smoke tests)
+│   ├── sure.sh             # Sure: setup (Rails migrations), logs, check
+│   └── headlamp.sh         # Headlamp: token (generate auth token)
+├── services/               # Helm charts and values
+│   ├── bigdata/            # Local chart: Hadoop + Spark
+│   ├── oracle/             # Local chart: Oracle 19c
+│   ├── mssql/              # Local chart: MSSQL 2025
+│   ├── logging/            # Local chart: Loki + Alloy
+│   ├── monitoring/         # Values only: kube-prometheus-stack
+│   ├── cloudflared/        # Local chart: Cloudflare Tunnel
+│   ├── localstack/         # Values only: localstack/localstack
+│   ├── headlamp/           # Values only: headlamp/headlamp
+│   ├── sure/               # Raw K8s manifests
+│   └── redshark/           # Local chart: RedShark API
 └── ck/                     # Export output (ck-*.txt)
 ```
 

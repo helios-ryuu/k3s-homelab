@@ -1,13 +1,13 @@
 #!/bin/bash
 # =================================================================
-# monitoring.sh — Quản lý Monitoring (Prometheus + Grafana)
+# monitoring.sh — Monitoring Special Operations (Prometheus + Grafana)
 # =================================================================
 # Sử dụng:
-#   bash monitoring.sh deploy          Deploy / Upgrade
-#   bash monitoring.sh delete          Force xóa
-#   bash monitoring.sh redeploy        Delete + Deploy
-#   bash monitoring.sh logs            Tail logs Grafana
-#   bash monitoring.sh check           Health check Monitoring stack
+#   bash monitoring.sh check           Health check Monitoring stack (5 sections)
+# =================================================================
+# Deploy/delete/redeploy: managed by ArgoCD
+#   argocd app sync monitoring
+#   argocd app delete monitoring --cascade
 # =================================================================
 
 source "$(dirname "${BASH_SOURCE[0]}")/../_lib.sh"
@@ -16,50 +16,6 @@ MON_NS="monitoring"
 LOG_NS="logging"
 
 # ======================== DEPLOY ========================
-
-do_deploy() {
-    check_node_labels monitoring
-    if ! check_secrets monitoring "$MON_NS" quiet; then
-        bash "$K3S_DIR/init-sec.sh" "$MON_NS"
-    fi
-    check_secrets monitoring "$MON_NS"
-    info "Deploy Monitoring (Prometheus + Grafana) → namespace: $MON_NS"
-    if release_exists mon $MON_NS; then
-        ok "(Upgrade existing release)"
-        helm upgrade mon prometheus-community/kube-prometheus-stack \
-            -f "$K3S_DIR/services/monitoring/values.yaml" -n $MON_NS $HELM_TIMEOUT
-    else
-        helm install mon prometheus-community/kube-prometheus-stack \
-            -f "$K3S_DIR/services/monitoring/values.yaml" \
-            -n $MON_NS --create-namespace $HELM_TIMEOUT
-    fi
-    wait_for_ready $MON_NS
-}
-
-# ======================== DELETE ========================
-
-do_delete() {
-    info "Force xóa Monitoring..."
-    helm uninstall mon -n $MON_NS --no-hooks 2>/dev/null
-    # CRDs của prometheus-operator
-    kubectl delete crd alertmanagerconfigs.monitoring.coreos.com \
-        alertmanagers.monitoring.coreos.com \
-        podmonitors.monitoring.coreos.com \
-        probes.monitoring.coreos.com \
-        prometheusagents.monitoring.coreos.com \
-        prometheuses.monitoring.coreos.com \
-        prometheusrules.monitoring.coreos.com \
-        scrapeconfigs.monitoring.coreos.com \
-        servicemonitors.monitoring.coreos.com \
-        thanosrulers.monitoring.coreos.com $FORCE 2>/dev/null
-    force_cleanup_ns $MON_NS
-}
-
-# ======================== LOGS ========================
-
-do_logs() {
-    kubectl logs -f -n $MON_NS -l app.kubernetes.io/name=grafana --tail=100
-}
 
 # ======================== CHECK ========================
 
@@ -287,7 +243,7 @@ print(len(streams))
     if [ "$FAIL" -gt 0 ]; then
         echo ""
         echo -e "  ${CYAN}Gợi ý sửa lỗi:${NC}"
-        echo "    - Pod MISSING: chạy 'bash monitoring.sh deploy'"
+        echo "    - Pod MISSING: argocd app sync monitoring"
         echo "    - Prometheus NOT READY: có thể đang load WAL (1-2 phút)"
         echo "    - Targets DOWN: kiểm tra network policies hoặc pod health"
         echo "    - Grafana 401/403: Kiểm tra grafana-admin-password trong infra-secrets"
@@ -299,21 +255,17 @@ print(len(streams))
 
 ACTION="${1:-}"
 case "$ACTION" in
-    deploy)   do_deploy ;;
-    delete)   do_delete ;;
-    redeploy) do_delete; sleep 5; do_deploy ;;
-    logs)     do_logs ;;
     check)    do_check ;;
     *)
-        echo -e "${YELLOW}monitoring.sh — Quản lý Monitoring (Prometheus + Grafana)${NC}"
+        echo -e "${YELLOW}monitoring.sh — Monitoring Special Operations (Prometheus + Grafana)${NC}"
         echo ""
         echo "Cú pháp: $0 <action>"
         echo ""
         echo "Actions:"
-        echo -e "  ${GREEN}deploy${NC}       Deploy / Upgrade"
-        echo -e "  ${RED}delete${NC}       Force xóa"
-        echo -e "  ${YELLOW}redeploy${NC}     Delete + Deploy lại sạch"
-        echo -e "  ${CYAN}logs${NC}         Tail logs Grafana"
-        echo -e "  ${CYAN}check${NC}        Health check Monitoring stack"
+        echo -e "  ${CYAN}check${NC}        Health check Monitoring stack (5 sections)"
+        echo ""
+        echo "Deploy/delete/redeploy → ArgoCD:"
+        echo "  argocd app sync monitoring"
+        echo "  argocd app delete monitoring --cascade"
         ;;
 esac
