@@ -46,9 +46,9 @@ services/bigdata/
 ```bash
 # Config changes: edit services/bigdata/values.yaml → git push → ArgoCD auto-syncs
 
-# Manual sync trigger
-argocd app sync bigdata --grpc-web
-argocd app wait bigdata --health --grpc-web
+# Manual sync trigger (acd helper — see README.md)
+acd app sync bigdata
+acd app wait bigdata --health
 
 # Logs
 kubectl logs -n bigdata -l app=hadoop-namenode -f

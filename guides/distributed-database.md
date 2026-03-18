@@ -67,8 +67,9 @@ services/mssql/
 
 ```bash
 # Config changes: edit services/oracle/values.yaml → git push → ArgoCD auto-syncs
-argocd app sync oracle --grpc-web
-argocd app wait oracle --health --grpc-web
+# Manual sync trigger (acd helper — see README.md)
+acd app sync oracle
+acd app wait oracle --health
 
 # Scale
 kubectl scale statefulset oracle-db -n oracle --replicas=<N>
@@ -85,8 +86,9 @@ kubectl delete pvc oracle-data-oracle-db-<N> -n oracle
 
 ```bash
 # Config changes: edit services/mssql/values.yaml → git push → ArgoCD auto-syncs
-argocd app sync mssql --grpc-web
-argocd app wait mssql --health --grpc-web
+# Manual sync trigger (acd helper — see README.md)
+acd app sync mssql
+acd app wait mssql --health
 
 # Scale
 kubectl scale statefulset mssql-db -n mssql --replicas=<N>

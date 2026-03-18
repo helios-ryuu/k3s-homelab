@@ -20,9 +20,9 @@
 ```bash
 # Config changes: edit services/headlamp/values.yaml or argocd-apps/headlamp.yaml → git push
 
-# Manual sync trigger
-argocd app sync headlamp --grpc-web
-argocd app wait headlamp --health --grpc-web
+# Manual sync trigger (acd helper — see README.md)
+acd app sync headlamp
+acd app wait headlamp --health
 
 # Logs
 kubectl logs -n kube-system -l app.kubernetes.io/name=headlamp -f
@@ -68,13 +68,3 @@ Paste the token into the Headlamp login screen.
 
 > Chart version is pinned to `0.39.0`. Chart `0.40.x` introduced `-session-ttl` which is unsupported by the headlamp binary and causes CrashLoopBackOff.
 
----
-
-## ArgoCD Helm Repo
-
-The headlamp Helm repo must be registered in ArgoCD (one-time, already in `SETUP.md`):
-
-```bash
-argocd repo add https://kubernetes-sigs.github.io/headlamp/ \
-  --type helm --name headlamp --grpc-web
-```

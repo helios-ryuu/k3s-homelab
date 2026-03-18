@@ -9,9 +9,9 @@
 ```bash
 # Config changes: edit services/redshark/values.yaml → git push → ArgoCD auto-syncs
 
-# Manual sync trigger
-argocd app sync redshark --grpc-web
-argocd app wait redshark --health --grpc-web
+# Manual sync trigger (acd helper — see README.md)
+acd app sync redshark
+acd app wait redshark --health
 
 # Logs
 kubectl logs -n redshark -l app=redshark-api -f

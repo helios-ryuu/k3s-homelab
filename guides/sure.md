@@ -17,9 +17,9 @@ kubectl label node <node> app-host=sure
 ```bash
 # Config changes: edit services/sure/sure-stack.yaml → git push → ArgoCD auto-syncs
 
-# Manual sync trigger
-argocd app sync sure --grpc-web
-argocd app wait sure --health --grpc-web
+# Manual sync trigger (acd helper — see README.md)
+acd app sync sure
+acd app wait sure --health
 
 # Logs
 kubectl logs -n sure -l app=sure-web -f

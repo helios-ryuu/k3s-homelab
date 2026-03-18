@@ -1,9 +1,5 @@
 # K3S Homelab — Setup Guide
 
-Hướng dẫn từng bước để khởi tạo cụm từ đầu.
-
----
-
 ## 0. Prerequisites
 
 Cài đặt các công cụ sau trên máy quản lý trước khi bắt đầu:
@@ -12,7 +8,6 @@ Cài đặt các công cụ sau trên máy quản lý trước khi bắt đầu:
 |------|-----------|---------|
 | `kubectl` | ≥ 1.30 | `curl -LO "https://dl.k8s.io/release/$(curl -sL https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" && chmod +x kubectl && sudo mv kubectl /usr/local/bin/` |
 | `helm` | ≥ 3.14 | `curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 \| bash` |
-| `argocd` CLI | v3.3.4 | `curl -sSL -o argocd-linux-amd64 https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64 && sudo install -m 555 argocd-linux-amd64 /usr/local/bin/argocd && rm argocd-linux-amd64` |
 | `kubeseal` | ≥ 0.36 | `KUBESEAL_VER=$(curl -s https://api.github.com/repos/bitnami-labs/sealed-secrets/releases/latest \| grep tag_name \| cut -d '"' -f4 \| sed 's/v//') && curl -sL "https://github.com/bitnami-labs/sealed-secrets/releases/download/v${KUBESEAL_VER}/kubeseal-${KUBESEAL_VER}-linux-amd64.tar.gz" \| tar xz && sudo install -m 755 kubeseal /usr/local/bin/kubeseal` |
 | `tailscale` | latest | `curl -fsSL https://tailscale.com/install.sh \| sh` |
 | `git` | any | package manager |
@@ -119,8 +114,6 @@ sinister                Ready    <none>                 ...
 
 Mỗi workload dùng `nodeSelector` — gán đúng labels trước khi sync ArgoCD.
 
-> **master-2 (`helios-droplet-ubuntu`) không có trong danh sách** — cloudflared dùng label built-in `node-role.kubernetes.io/control-plane` (k3s tự gán cho tất cả master), không cần label thủ công.
-
 ```bash
 # master-1 (helios-imac-ubuntu) — monitoring, logging, localstack, bigdata-master, sure
 kubectl label node helios-imac-ubuntu \
@@ -186,8 +179,6 @@ EOF
 echo "SURE_SECRET_KEY_BASE=$(head -c 64 /dev/urandom | od -An -tx1 | tr -d ' \n')" >> .env
 ```
 
-> **Lưu file `.env` ở nơi an toàn** (password manager, encrypted backup) — đây là nguồn duy nhất để tái tạo sealed secrets khi rebuild cluster.
-
 ### 2.2 Tham chiếu key mapping
 
 **`infra-secrets`** — trong các namespace: `cloudflared`, `localstack`, `monitoring`, `mssql`, `oracle`, `sure`, `kube-system`
@@ -251,41 +242,48 @@ Vào `github.com/helios-ryuu/k3s-homelab` → Settings → Deploy keys → Add d
 |-----------|--------|---------|
 | `argocd` | `helios.id.vn` | `http://argocd-server.argocd.svc.cluster.local:80` |
 
-### 3.3 Đăng nhập ArgoCD CLI
+### 3.3 Đăng nhập ArgoCD (trong pod)
 
-Tunnel chưa hoạt động ở bước này (cloudflared chưa được deploy). Vì đang chạy kubectl **trực tiếp trên node k3s**, có thể kết nối thẳng vào ClusterIP — không cần port-forward:
+`argocd-server` pod đã có CLI built-in — exec vào pod thay vì cài binary local.
 
 ```bash
 ARGOCD_PASSWORD=$(kubectl get secret argocd-initial-admin-secret -n argocd \
     -o jsonpath='{.data.password}' | base64 -d)
 
-ARGOCD_IP=$(kubectl get svc argocd-server -n argocd -o jsonpath='{.spec.clusterIP}')
-
-argocd login $ARGOCD_IP:80 \
+# Login một lần — session lưu trong pod filesystem, dùng được cho mọi lệnh argocd sau
+kubectl exec -n argocd deployment/argocd-server -- \
+    argocd login localhost:8080 \
     --username admin \
     --password "$ARGOCD_PASSWORD" \
-    --insecure --grpc-web
+    --plaintext
 
-# Đổi mật khẩu ngay sau khi đăng nhập
-argocd account update-password
+# Helper cho các bước sau
+acd() { kubectl exec -n argocd deployment/argocd-server -- argocd "$@"; }
+
+# Kiểm tra kết nối
+acd app list
 ```
+
+> Nếu pod restart: chạy lại 2 lệnh login + `acd()` ở trên.
+> Đổi mật khẩu qua UI (`https://argocd.helios.id.vn`) sau khi cloudflared lên.
 
 ### 3.4 Đăng ký repo
 
 ```bash
-# Git repo (dùng SSH deploy key)
-argocd repo add git@github.com:helios-ryuu/k3s-homelab.git \
-    --ssh-private-key-path /tmp/argocd-deploy-key \
-    --name k3s-homelab \
-    --grpc-web
+# ArgoCD tự nhận repo từ K8s Secret có label này (không cần argocd repo add)
+kubectl create secret generic argocd-repo-k3s-homelab \
+    -n argocd \
+    --from-literal=type=git \
+    --from-literal=url=git@github.com:helios-ryuu/k3s-homelab.git \
+    --from-file=sshPrivateKey=/tmp/argocd-deploy-key
 
-# Helm repos (ArgoCD cần đăng ký riêng, khác với `helm repo add`)
-argocd repo add https://kubernetes-sigs.github.io/headlamp/ \
-    --type helm --name headlamp --grpc-web
+kubectl label secret argocd-repo-k3s-homelab \
+    -n argocd argocd.argoproj.io/secret-type=repository
 
-argocd repo add https://bitnami-labs.github.io/sealed-secrets \
-    --type helm --name sealed-secrets --grpc-web
+rm /tmp/argocd-deploy-key  # xóa private key sau khi nạp vào K8s
 ```
+
+> Helm repos (headlamp, sealed-secrets) không cần đăng ký — ArgoCD v2+ tự fetch từ `repoURL` trong Application manifest.
 
 ### 3.5 Apply root Application
 
@@ -303,9 +301,8 @@ Trao quyền quản lý toàn bộ apps cho ArgoCD. ArgoCD sync theo thứ tự 
 Đợi sealed-secrets controller sẵn sàng:
 
 ```bash
-argocd app sync sealed-secrets --grpc-web
-argocd app wait sealed-secrets --health --grpc-web
-kubectl rollout status deployment sealed-secrets-controller -n kube-system
+# Đợi sealed-secrets controller lên (auto-sync wave -2 tự trigger)
+kubectl rollout status deployment sealed-secrets-controller -n kube-system --timeout=180s
 ```
 
 Load `.env` và generate SealedSecret files:
@@ -370,20 +367,18 @@ kubectl get secret -n kube-system \
 # Lưu cùng với .env — KHÔNG commit lên git
 ```
 
-### 3.7 Sync cloudflared và đóng port-forward
+### 3.7 Sync cloudflared
 
-Sync cloudflared qua port-forward trước, sau đó tunnel sẽ lên và các lệnh tiếp theo dùng được domain:
+Sync cloudflared để tunnel lên, các lệnh tiếp theo dùng được domain:
 
 ```bash
-argocd app sync cloudflared --grpc-web
-argocd app wait cloudflared --health --grpc-web
+acd app sync cloudflared
+acd app wait cloudflared --health
 ```
 
 Kiểm tra tunnel đã sống: `curl -sf https://argocd.helios.id.vn/healthz`
 
----
-
-## 3.8 Cập nhật secrets
+### 3.8 Cập nhật secrets
 
 Khi cần thay đổi giá trị (ví dụ rotate token):
 
@@ -413,7 +408,7 @@ git add secrets/ && git commit -m "secrets: rotate <key-name>" && git push
 # ArgoCD sync tự động — pods restart nếu cần
 ```
 
-## 3.9 Rebuild cluster (restore sealed secrets)
+### 3.9 Rebuild cluster (restore sealed secrets)
 
 Khi rebuild từ đầu mà đã có `sealed-secrets-key-backup.yaml`:
 
@@ -427,14 +422,6 @@ kubectl apply -f sealed-secrets-key-backup.yaml
 ```
 
 > Nếu mất `sealed-secrets-key-backup.yaml`: chạy lại toàn bộ bước 3.6 để re-seal từ `.env`.
-
-### Fallback khẩn cấp
-
-Tạo secrets trực tiếp mà không qua GitOps (ví dụ khi controller chưa sẵn sàng):
-
-```bash
-./init-sec.sh
-```
 
 ---
 
@@ -458,34 +445,38 @@ Sau khi cloudflared healthy, thêm routes trên **Cloudflare Dashboard**:
 ### 4.2 Sync các app còn lại
 
 ```bash
+# Nếu pod bị restart hoặc mở terminal mới, login lại:
+ARGOCD_PASSWORD=$(kubectl get secret argocd-initial-admin-secret -n argocd \
+    -o jsonpath='{.data.password}' | base64 -d)
+kubectl exec -n argocd deployment/argocd-server -- \
+    argocd login localhost:8080 --username admin --password "$ARGOCD_PASSWORD" --plaintext
+acd() { kubectl exec -n argocd deployment/argocd-server -- argocd "$@"; }
+
 # Logging — Loki + Alloy
-argocd app sync logging --grpc-web
-argocd app wait logging --health --grpc-web
+acd app sync logging  && acd app wait logging  --health
 
 # Monitoring — Prometheus + Grafana
-argocd app sync monitoring --grpc-web
-argocd app wait monitoring --health --grpc-web
+acd app sync monitoring && acd app wait monitoring --health
 
 # LocalStack
-argocd app sync localstack --grpc-web
-argocd app wait localstack --health --grpc-web
+acd app sync localstack && acd app wait localstack --health
 
 # Databases (thứ tự tùy ý)
-argocd app sync oracle --grpc-web
-argocd app sync mssql --grpc-web
+acd app sync oracle
+acd app sync mssql
 
 # BigData
-argocd app sync bigdata --grpc-web
+acd app sync bigdata
 
 # Apps
-argocd app sync headlamp --grpc-web
-argocd app sync sure --grpc-web
+acd app sync headlamp
+acd app sync sure
 
 # Xem trạng thái tất cả
-argocd app list --grpc-web
+acd app list
 ```
 
-> Nếu một app chưa xuất hiện: `argocd app sync root --grpc-web`
+> Nếu một app chưa xuất hiện: `acd app sync root`
 >
 > Sau đây, push lên `main` là đủ — ArgoCD phát hiện và sync tự động.
 

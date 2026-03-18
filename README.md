@@ -82,6 +82,22 @@ mssql-db-2.mssql-svc.mssql.svc.cluster.local,1433
 
 ## Quản lý cụm
 
+### `acd` Helper
+
+`argocd-server` pod đã có CLI built-in — không cần cài binary local. Định nghĩa một lần mỗi terminal session:
+
+```bash
+ARGOCD_PASSWORD=$(kubectl get secret argocd-initial-admin-secret -n argocd \
+    -o jsonpath='{.data.password}' | base64 -d)
+kubectl exec -n argocd deployment/argocd-server -- \
+    argocd login localhost:8080 --username admin --password "$ARGOCD_PASSWORD" --plaintext
+acd() { kubectl exec -n argocd deployment/argocd-server -- argocd "$@"; }
+```
+
+> Nếu pod restart: chạy lại 2 lệnh trên.
+
+---
+
 ### Chẩn đoán (`ck.sh`)
 
 ```bash
@@ -108,7 +124,7 @@ git add <file> && git commit -m "..." && git push
         ↓
 ArgoCD phát hiện OutOfSync
         ↓
-argocd app sync <app> --grpc-web
+acd app sync <app>
 ```
 
 **Ví dụ: thay đổi replica cloudflared**
@@ -118,8 +134,8 @@ vi services/cloudflared/values.yaml   # replicas: 2 → 3
 git add services/cloudflared/values.yaml
 git commit -m "feat(cloudflared): scale to 3 replicas"
 git push
-argocd app sync cloudflared --grpc-web
-argocd app wait cloudflared --health --grpc-web
+acd app sync cloudflared
+acd app wait cloudflared --health
 ```
 
 ### Cập nhật Secrets
@@ -147,11 +163,11 @@ git add secrets/ && git commit -m "secrets: rotate <key>" && git push
 ### Xử lý app OutOfSync / lỗi
 
 ```bash
-argocd app get <app> --grpc-web              # Xem lý do
-argocd app get <app> --hard-refresh --grpc-web  # Force refresh cache
-argocd app diff <app> --grpc-web             # Xem diff trước khi sync
-argocd app sync <app> --grpc-web             # Sync thường
-argocd app sync <app> --force --grpc-web     # Force replace (drift nặng)
+acd app get <app>               # Xem lý do
+acd app get <app> --hard-refresh  # Force refresh cache
+acd app diff <app>              # Xem diff trước khi sync
+acd app sync <app>              # Sync thường
+acd app sync <app> --force      # Force replace (drift nặng)
 
 # Debug pod
 kubectl describe pod <pod> -n <namespace>
@@ -161,9 +177,9 @@ kubectl logs <pod> -n <namespace> --previous
 ### Xóa và triển khai lại app
 
 ```bash
-argocd app delete <app> --cascade --grpc-web   # Xóa app + resources (PVC giữ lại)
-argocd app sync root --grpc-web                # Root recreate child app
-argocd app sync <app> --grpc-web               # Sync lại
+acd app delete <app> --cascade  # Xóa app + resources (PVC giữ lại)
+acd app sync root               # Root recreate child app
+acd app sync <app>              # Sync lại
 ```
 
 ---
@@ -238,7 +254,6 @@ Tạo PAT: GitHub → Settings → Developer settings → Personal access tokens
 ```
 k3s-homelab/
 ├── ck.sh                   # Chẩn đoán cụm
-├── init-sec.sh             # Fallback khẩn cấp (deprecated — dùng Sealed Secrets)
 ├── .env                    # Secrets — gitignored, nguồn để tạo sealed secrets
 ├── README.md               # Kiến trúc và hướng dẫn sử dụng
 ├── SETUP.md                # Hướng dẫn khởi tạo cụm từ đầu

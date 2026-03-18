@@ -30,9 +30,9 @@ kubectl label node <node> node-role.kubernetes.io/monitoring=true
 ```bash
 # Config changes: edit services/monitoring/values.yaml → git push → ArgoCD auto-syncs
 
-# Manual sync trigger
-argocd app sync monitoring --grpc-web
-argocd app wait monitoring --health --grpc-web
+# Manual sync trigger (acd helper — see README.md)
+acd app sync monitoring
+acd app wait monitoring --health
 
 # Logs
 kubectl logs -n monitoring -l app.kubernetes.io/name=grafana -f

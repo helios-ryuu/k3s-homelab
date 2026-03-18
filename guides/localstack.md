@@ -18,9 +18,9 @@
 ```bash
 # Config changes: edit services/localstack/values.yaml → git push → ArgoCD auto-syncs
 
-# Manual sync trigger
-argocd app sync localstack --grpc-web
-argocd app wait localstack --health --grpc-web
+# Manual sync trigger (acd helper — see README.md)
+acd app sync localstack
+acd app wait localstack --health
 
 # Logs
 kubectl logs -n localstack -l app.kubernetes.io/name=localstack -f

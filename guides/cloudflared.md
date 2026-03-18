@@ -23,9 +23,9 @@
 ```bash
 # Config changes: edit services/cloudflared/values.yaml → git push → ArgoCD auto-syncs
 
-# Manual sync trigger
-argocd app sync cloudflared --grpc-web
-argocd app wait cloudflared --health --grpc-web
+# Manual sync trigger (acd helper — see README.md)
+acd app sync cloudflared
+acd app wait cloudflared --health
 
 # Logs
 kubectl logs -n cloudflared -l app=cloudflared -f

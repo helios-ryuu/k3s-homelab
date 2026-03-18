@@ -28,9 +28,9 @@ kubectl label node <node> node-role.kubernetes.io/logging=true
 ```bash
 # Config changes: edit services/logging/values.yaml or templates → git push → ArgoCD auto-syncs
 
-# Manual sync trigger
-argocd app sync logging --grpc-web
-argocd app wait logging --health --grpc-web
+# Manual sync trigger (acd helper — see README.md)
+acd app sync logging
+acd app wait logging --health
 
 # Logs
 kubectl logs -n logging -l app=loki -f
