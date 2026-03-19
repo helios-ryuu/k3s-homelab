@@ -2,13 +2,10 @@
   oracle-db.yaml — Headless Service + NodePort Service + StatefulSet
   replicas={{ .Values.replicas }}
 
-  LAB MAPPING:
-  - Headless Service: DNS nội bộ cho cross-instance queries (Lab 2)
-    oracle-db-0.oracle-svc.oracle.svc.cluster.local (Node 1 = ĐHCNTT / Chi nhánh 1)
-    oracle-db-1.oracle-svc.oracle.svc.cluster.local (Node 2 = ĐHQG / Chi nhánh 2)
-  - NodePort 31521: kết nối từ DataGrip/SQL Developer qua Tailscale IP (Lab 1, 2)
-  - hostPort 1521: kết nối trực tiếp qua IP node (Lab 2 Bài 1 database link)
-  - tnsnames.ora (ConfigMap): ORACLE_DB_0, ORACLE_DB_1 → Lab 2 database link
+  - Headless Service: DNS nội bộ cho từng instance
+    oracle-db-0.oracle-svc.oracle.svc.cluster.local (Node 1)
+    oracle-db-1.oracle-svc.oracle.svc.cluster.local (Node 2)
+  - NodePort 31521: kết nối từ DataGrip/SQL Developer qua Tailscale IP
   - Anti-affinity: đảm bảo mỗi pod trên 1 node riêng biệt
 
   FAULT TOLERANCE:
@@ -19,7 +16,6 @@
 
 # ==========================================================================
 # HEADLESS SERVICE: oracle-svc (DNS nội bộ cho StatefulSet)
-# Lab 2: oracle-db-0.oracle-svc ↔ oracle-db-1.oracle-svc (database link)
 # ==========================================================================
 apiVersion: v1
 kind: Service
@@ -39,7 +35,7 @@ spec:
 ---
 # ==========================================================================
 # NODEPORT SERVICE: Kết nối từ bên ngoài (DataGrip, SQL Developer)
-# Lab 1 & 2: Truy cập qua <Tailscale-IP>:{{ .Values.nodePort }}
+# Truy cập qua <Tailscale-IP>:{{ .Values.nodePort }}
 #   Node 1:   <node-1-ip>:{{ .Values.nodePort }}
 #   Node 2:   <node-2-ip>:{{ .Values.nodePort }}
 # ==========================================================================
@@ -64,9 +60,8 @@ spec:
 # ==========================================================================
 # STATEFULSET: oracle-db
 # replicas: {{ .Values.replicas }}
-# Lab 1: oracle-db-0 = Node 1, oracle-db-1 = Node 2. PDB BT1 = LAB11PDB, PDB BT2 = LAB12PDB
-# Lab 2 Bài 2: oracle-db-0 = Node 1, oracle-db-1 = Node 2. PDB BT = LAB22PDB
-# Lab 2 Bài 3: oracle-db-0 = Chi nhánh 1, oracle-db-1 = Chi nhánh 2. PDB BT = LAB23PDB
+# oracle-db-0 = Node 1 | oracle-db-1 = Node 2
+# PDBs: LAB11PDB, LAB12PDB (mỗi instance)
 # ==========================================================================
 apiVersion: apps/v1
 kind: StatefulSet
@@ -103,7 +98,7 @@ spec:
 {{ toYaml .Values.nodeSelector | indent 8 }}
       {{- end }}
       affinity:
-        # CẤM 2 Oracle chung 1 node → mỗi node tối đa 1 pod
+        # Đảm bảo mỗi node tối đa 1 Oracle pod
         podAntiAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
           - labelSelector:
@@ -139,12 +134,11 @@ spec:
             cpu: {{ .Values.oracle.resources.limits.cpu | quote }}
         ports:
         - containerPort: 1521
-          # hostPort: kết nối trực tiếp qua IP node (Lab 2 database link)
           hostPort: 1521
         volumeMounts:
         - name: oracle-data
           mountPath: /opt/oracle/oradata
-        # tnsnames.ora: cấu hình sẵn ORACLE_DB_0/1 cho Lab 2 database link
+        # tnsnames.ora: cấu hình PDB entries cho LAB11PDB/LAB12PDB
         - name: tns-data-volume
           mountPath: /tmp/custom_tns/tnsnames.ora
           subPath: tnsnames.ora

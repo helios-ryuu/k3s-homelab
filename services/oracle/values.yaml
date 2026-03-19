@@ -1,5 +1,5 @@
 # =================================================================
-# Oracle Database 19c — Distributed trên K3s
+# Oracle Database 19c — trên K3s
 # =================================================================
 # Deploy:  ./k3s.sh deploy oracle
 # Delete:  ./k3s.sh delete oracle
@@ -9,16 +9,11 @@
 # ┌──────────────────────────────────────────────────────────────┐
 # │                   PHÂN BỔ INSTANCE                          │
 # ├──────────────┬──────────────┬────────────────────────────────┤
-# │ Pod          │ Node         │ Vai trò trong Lab              │
+# │ Pod          │ Node         │ PDBs                           │
 # ├──────────────┼──────────────┼────────────────────────────────┤
-# │ oracle-db-0  │ node-1       │ Lab 2 Bài 2: ĐH CNTT (DHCNTT)│
-# │              │              │ Lab 2 Bài 3: Chi nhánh 1      │
-# │              │              │   (user ADMIN)                 │
+# │ oracle-db-0  │ node-1       │ LAB11PDB, LAB12PDB             │
 # ├──────────────┼──────────────┼────────────────────────────────┤
-# │ oracle-db-1  │ node-2       │ Lab 2 Bài 2: ĐH Quốc Gia     │
-# │              │              │   (user DHQGHCM + db link)     │
-# │              │              │ Lab 2 Bài 3: Chi nhánh 2       │
-# │              │              │   (user ADMIN)                 │
+# │ oracle-db-1  │ node-2       │ LAB11PDB, LAB12PDB             │
 # └──────────────┴──────────────┴────────────────────────────────┘
 #
 # Scheduling: Pin vào database nodes (1 pod mỗi node)
@@ -26,63 +21,14 @@
 # - Nếu cả 2 offline → cả 2 Pending
 # - PVC giữ nguyên data khi pod restart / node reboot
 #
-# ┌──────────────────────────────────────────────────────────────┐
-# │              MAPPING BÀI TẬP THỰC HÀNH                     │
-# ├──────────────────────────────────────────────────────────────┤
-# │ LAB 1 — Bài 1 & 2: (chạy trên bất kỳ instance nào)        │
-# │   • Tạo user BAITHI                                        │
-# │   • Tables: HANGHANGKHONG, CHUYENBAY, NHANVIEN, PHANCONG   │
-# │   • Tables: XE, TUYEN, KHACH, VEXE                         │
-# │   • PKs, FKs, CHECK constraints, triggers                  │
-# │   • Queries: JOIN, GROUP BY, HAVING, phép chia              │
-# │                                                             │
-# │ LAB 1 — Bài 3: Phân quyền                                  │
-# │   • Tạo user is01, is02                                    │
-# │   • Tạo bảng, GRANT INSERT/DELETE/UPDATE giữa 2 user       │
-# │   • Tạo role, gán role                                     │
-# │                                                             │
-# │ LAB 2 — Bài 1: Database Link                                │
-# │   • Tạo DB link giữa oracle-db-0 ↔ oracle-db-1             │
-# │   • Connected user link, fixed user link                   │
-# │   • Private link, public link                               │
-# │   • tnsnames.ora đã được cấu hình sẵn trong ConfigMap       │
-# │                                                             │
-# │ LAB 2 — Bài 2: Quản lý điểm ĐHQG (kết nối một chiều)       │
-# │   • oracle-db-0: user DHCNTT (quản lý ĐH CNTT)             │
-# │     - Tables: SINHVIEN, KHOA, HOCPHI                       │
-# │     - role_DHQG: SELECT trên tất cả bảng                    │
-# │     - role_SV: SELECT trên SINHVIEN, KHOA                  │
-# │     - user DHQG → gán role_DHQG                            │
-# │     - user SV → gán role_SV                                │
-# │   • oracle-db-1: user DHQGHCM                              │
-# │     - Tạo DB link đến ĐH CNTT (dùng user DHQG)             │
-# │     - Truy vấn: SELECT * FROM SINHVIEN@link_dhcntt         │
-# │                                                             │
-# │ LAB 2 — Bài 3: Ngân hàng 2 chi nhánh (kết nối hai chiều)   │
-# │   • Mỗi instance = 1 chi nhánh                             │
-# │   • Tables: KHACHHANG, CHINHANH, GIAODICH                  │
-# │   • user ADMIN: quản lý bảng + trigger CapNhatGD           │
-# │   • user GUEST: INSERT/SELECT GIAODICH, SELECT KHACHHANG   │
-# │   • role_GIAODICH → gán cho GUEST                          │
-# │   • DB link giữa 2 chi nhánh dùng user GUEST               │
-# │   • Procedure: GuiTien(MaKH, SoTienGD)                     │
-# │   • Procedure: RutTien(MaKH, SoTienGD)                     │
-# │   • Trigger: CapNhatGD (cộng/trừ TongTien)                 │
-# └──────────────────────────────────────────────────────────────┘
-#
 # Kết nối từ bên ngoài (DataGrip / SQL Developer):
 #   Host: <Tailscale IP>  Port: 31521 (NodePort)
 #   Node 1:    <node-1-ip>:31521
 #   Node 2:    <node-2-ip>:31521
 #   SID: ORCLCDB  |  User: sys as sysdba  |  Pass: Oracle@2026
-#
-# Kết nối nội bộ giữa 2 instances (trong cluster):
-#   oracle-db-0.oracle-svc.oracle.svc.cluster.local:1521
-#   oracle-db-1.oracle-svc.oracle.svc.cluster.local:1521
-#   (đã cấu hình sẵn trong tnsnames.ora → ORACLE_DB_0, ORACLE_DB_1)
 # =================================================================
 
-# Số lượng instance Oracle (1 = single, 2 = distributed)
+# Số lượng instance Oracle (2 = 2 instances độc lập)
 replicas: 2
 
 # Label để chọn node deploy Oracle

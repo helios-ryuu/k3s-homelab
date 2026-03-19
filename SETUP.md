@@ -123,21 +123,15 @@ kubectl label node helios-imac-ubuntu \
     node-role.kubernetes.io/bigdata-master=true \
     app-host=sure
 
-# master-3 (helios) — bigdata-worker, oracle, mssql
+# master-3 (helios) — bigdata-worker, oracle
 kubectl label node helios \
     node-role.kubernetes.io/bigdata-worker=true \
-    node-role.kubernetes.io/database-oracle=true \
-    node-role.kubernetes.io/database-mssql=true
+    node-role.kubernetes.io/database-oracle=true
 
-# worker-1 (diepvi) — mssql only
-kubectl label node diepvi \
-    node-role.kubernetes.io/database-mssql=true
-
-# worker-2 (sinister) — bigdata-worker, oracle, mssql
+# worker-2 (sinister) — bigdata-worker, oracle
 kubectl label node sinister \
     node-role.kubernetes.io/bigdata-worker=true \
-    node-role.kubernetes.io/database-oracle=true \
-    node-role.kubernetes.io/database-mssql=true
+    node-role.kubernetes.io/database-oracle=true
 ```
 
 > **Kiểm tra:** `kubectl get nodes --show-labels`
@@ -161,9 +155,6 @@ LOCALSTACK_TOKEN=<localstack-pro-license-key>
 # Grafana
 GRAFANA_ADMIN_PASSWORD=<mật-khẩu-grafana>
 
-# MSSQL
-MSSQL_PASSWORD=<mật-khẩu-sa-mssql>
-
 # Oracle
 ORACLE_PASSWORD=<mật-khẩu-sys-oracle>
 
@@ -181,7 +172,7 @@ echo "SURE_SECRET_KEY_BASE=$(head -c 64 /dev/urandom | od -An -tx1 | tr -d ' \n'
 
 ### 2.2 Tham chiếu key mapping
 
-**`infra-secrets`** — trong các namespace: `cloudflared`, `localstack`, `monitoring`, `mssql`, `oracle`, `sure`, `kube-system`
+**`infra-secrets`** — trong các namespace: `cloudflared`, `localstack`, `monitoring`, `oracle`, `sure`, `kube-system`
 
 | Key | Từ `.env` | Dùng bởi |
 |-----|-----------|----------|
@@ -189,7 +180,6 @@ echo "SURE_SECRET_KEY_BASE=$(head -c 64 /dev/urandom | od -An -tx1 | tr -d ' \n'
 | `localstack-token` | `LOCALSTACK_TOKEN` | localstack |
 | `grafana-admin-password` | `GRAFANA_ADMIN_PASSWORD` | monitoring |
 | `admin-user` / `admin-password` | hardcoded `admin` / `GRAFANA_ADMIN_PASSWORD` | monitoring (existingSecret) |
-| `mssql-password` | `MSSQL_PASSWORD` | mssql |
 | `oracle-password` | `ORACLE_PASSWORD` | oracle |
 | `sure-postgres-password` | `SURE_POSTGRES_PASSWORD` | sure |
 | `sure-secret-key-base` | `SURE_SECRET_KEY_BASE` | sure (Rails, tạo một lần trong `.env`) |
@@ -311,14 +301,13 @@ Load `.env` và generate SealedSecret files:
 source .env
 
 # infra-secrets — 7 namespaces
-for NS in cloudflared localstack monitoring mssql oracle sure kube-system; do
+for NS in cloudflared localstack monitoring oracle sure kube-system; do
     kubectl create secret generic infra-secrets \
         --from-literal=cloudflare-token="$CLOUDFLARE_TOKEN" \
         --from-literal=localstack-token="$LOCALSTACK_TOKEN" \
         --from-literal=grafana-admin-password="$GRAFANA_ADMIN_PASSWORD" \
         --from-literal=admin-user="admin" \
         --from-literal=admin-password="$GRAFANA_ADMIN_PASSWORD" \
-        --from-literal=mssql-password="$MSSQL_PASSWORD" \
         --from-literal=oracle-password="$ORACLE_PASSWORD" \
         --from-literal=sure-secret-key-base="$SURE_SECRET_KEY_BASE" \
         --from-literal=sure-postgres-password="$SURE_POSTGRES_PASSWORD" \
@@ -393,7 +382,6 @@ kubectl create secret generic infra-secrets \
     --from-literal=grafana-admin-password="$GRAFANA_ADMIN_PASSWORD" \
     --from-literal=admin-user="admin" \
     --from-literal=admin-password="$GRAFANA_ADMIN_PASSWORD" \
-    --from-literal=mssql-password="$MSSQL_PASSWORD" \
     --from-literal=oracle-password="$ORACLE_PASSWORD" \
     --from-literal=sure-secret-key-base="$SURE_SECRET_KEY_BASE" \
     --from-literal=sure-postgres-password="$SURE_POSTGRES_PASSWORD" \
@@ -461,9 +449,8 @@ acd app sync monitoring && acd app wait monitoring --health
 # LocalStack
 acd app sync localstack && acd app wait localstack --health
 
-# Databases (thứ tự tùy ý)
+# Database
 acd app sync oracle
-acd app sync mssql
 
 # BigData
 acd app sync bigdata

@@ -84,13 +84,13 @@ kubectl logs -n logging -l app.kubernetes.io/name=alloy -f   # per-node DaemonSe
 {namespace="oracle", pod="oracle-db-0"}
 
 # Case-insensitive text search
-{namespace="mssql"} |~ "(?i)error"
+{namespace="oracle"} |~ "(?i)error"
 
 # Exclude noise
 {namespace="monitoring"} !~ "health"
 
 # Specific container
-{namespace="mssql", container="mssql-engine"}
+{namespace="oracle", container="oracle-engine"}
 
 # Logs from a node
 {node="<node-name>"}

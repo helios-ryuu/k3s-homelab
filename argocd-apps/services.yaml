@@ -9,7 +9,6 @@ spec:
         elements:
           - name: cloudflared
           - name: logging
-          - name: mssql
           - name: oracle
           - name: bigdata
           - name: redshark

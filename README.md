@@ -13,9 +13,9 @@ Xem [SETUP.md](SETUP.md) để khởi tạo cụm từ đầu.
 |------|----------|-----|--------------|---------|-----------|
 | master-1 | `helios-imac-ubuntu` | Ubuntu | `100.102.51.39` | master | monitoring, logging, bigdata-master, localstack, sure |
 | master-2 | `helios-droplet-ubuntu` | Ubuntu | `100.122.163.31` | master | cloudflared |
-| master-3 | `helios` | Fedora | `100.110.86.71` | master | bigdata-worker, oracle-db-0, mssql-db-1 |
-| worker-1 | `diepvi` | Ubuntu | `100.86.204.84` | worker | mssql-db-0 · **có thể offline** |
-| worker-2 | `sinister` | Ubuntu | `100.73.216.110` | worker | bigdata-worker, oracle-db-1, mssql-db-2 · **có thể offline** |
+| master-3 | `helios` | Fedora | `100.110.86.71` | master | bigdata-worker, oracle-db-0 |
+| worker-1 | `diepvi` | Ubuntu | `100.86.204.84` | worker | **có thể offline** |
+| worker-2 | `sinister` | Ubuntu | `100.73.216.110` | worker | bigdata-worker, oracle-db-1 · **có thể offline** |
 
 ---
 
@@ -39,11 +39,8 @@ Xem [SETUP.md](SETUP.md) để khởi tạo cụm từ đầu.
 | Loki | `100.102.51.39` | `30100` |
 | LocalStack | `100.102.51.39` | `30566` |
 | Sure App | `100.102.51.39` | `30333` |
-| Oracle (node-0) | `100.110.86.71` | `31521` |
-| Oracle (node-1) | `100.73.216.110` | `31521` |
-| MSSQL (db-0) | `100.86.204.84` | `31433` |
-| MSSQL (db-1) | `100.110.86.71` | `31433` |
-| MSSQL (db-2) | `100.73.216.110` | `31433` |
+| Oracle (db-0) | `100.110.86.71` | `31521` |
+| Oracle (db-1) | `100.73.216.110` | `31521` |
 | HDFS WebUI | `100.102.51.39` | `9870` |
 | YARN WebUI | `100.102.51.39` | `8088` |
 | Spark WebUI | `100.102.51.39` | `30808` |
@@ -54,12 +51,7 @@ Xem [SETUP.md](SETUP.md) để khởi tạo cụm từ đầu.
 # Oracle
 oracle-db-0.oracle-svc.oracle.svc.cluster.local:1521
 oracle-db-1.oracle-svc.oracle.svc.cluster.local:1521
-# TNS alias (tnsnames.ora): ORACLE_DB_0, ORACLE_DB_1
-
-# MSSQL
-mssql-db-0.mssql-svc.mssql.svc.cluster.local,1433
-mssql-db-1.mssql-svc.mssql.svc.cluster.local,1433
-mssql-db-2.mssql-svc.mssql.svc.cluster.local,1433
+# TNS alias (tnsnames.ora): LAB11PDB_0/1, LAB12PDB_0/1
 ```
 
 ---
@@ -70,7 +62,6 @@ mssql-db-2.mssql-svc.mssql.svc.cluster.local,1433
 |---------|-----------|-------|-------|
 | `bigd` | `bigdata` | local `services/bigdata/` | Hadoop 3.2.1 + Spark 3.5.8 |
 | `ora` | `oracle` | local `services/oracle/` | Oracle 19c (2 instances) |
-| `mssql` | `mssql` | local `services/mssql/` | MSSQL 2025 (3 instances) |
 | `localstack` | `localstack` | `localstack/localstack` | LocalStack Pro (AWS emulator) |
 | `log` | `logging` | local `services/logging/` | Loki 3.6.7 + Grafana Alloy |
 | `mon` | `monitoring` | `prometheus-community/kube-prometheus-stack` `82.x` | Prometheus + Grafana |
@@ -263,7 +254,7 @@ k3s-homelab/
 │   ├── root.yaml           # Root Application — theo dõi argocd-apps/
 │   ├── sealed-secrets.yaml # Sealed Secrets controller (wave -2)
 │   ├── secrets.yaml        # SealedSecret objects từ secrets/ (wave -1)
-│   ├── services.yaml       # ApplicationSet — cloudflared, logging, mssql, oracle, bigdata, redshark, sure
+│   ├── services.yaml       # ApplicationSet — cloudflared, logging, oracle, bigdata, redshark, sure
 │   ├── headlamp.yaml       # Headlamp K8s dashboard (multi-source)
 │   ├── monitoring.yaml     # kube-prometheus-stack (multi-source)
 │   └── localstack.yaml     # LocalStack Pro (multi-source)
@@ -271,7 +262,6 @@ k3s-homelab/
 ├── services/               # Helm charts và values
 │   ├── bigdata/            # Chart: Hadoop + Spark
 │   ├── oracle/             # Chart: Oracle 19c
-│   ├── mssql/              # Chart: MSSQL 2025
 │   ├── logging/            # Chart: Loki + Alloy
 │   ├── monitoring/         # Values only: kube-prometheus-stack
 │   ├── headlamp/           # Values only: headlamp
@@ -283,7 +273,7 @@ k3s-homelab/
 │   ├── _lib.sh             # Shared helpers (màu sắc, functions) cho scripts
 │   ├── bigdata.md
 │   ├── cloudflared.md
-│   ├── distributed-database.md
+│   ├── database.md
 │   ├── headlamp.md
 │   ├── localstack.md
 │   ├── logging.md

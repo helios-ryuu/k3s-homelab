@@ -1,5 +1,5 @@
 apiVersion: v2
 name: oracle
-description: Oracle Database 19c distributed cluster cho K3s lab
+description: Oracle Database 19c cho K3s lab
 version: 1.0.0
 appVersion: "19c"
