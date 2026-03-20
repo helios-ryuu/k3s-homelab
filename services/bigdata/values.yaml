@@ -61,10 +61,10 @@ hadoop:
     resources:
       requests:
         memory: 512Mi
-        cpu: 500m
+        cpu: "2000m"
       limits:
         memory: 6Gi
-        cpu: "1"
+        cpu: "8000m"
 
   datanode:
     image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
@@ -72,20 +72,20 @@ hadoop:
     resources:
       requests:
         memory: 512Mi
-        cpu: 500m
+        cpu: "2000m"
       limits:
-        memory: 2Gi
-        cpu: "1"
+        memory: 6Gi
+        cpu: "8000m"
 
   resourcemanager:
     image: bde2020/hadoop-resourcemanager:2.0.0-hadoop3.2.1-java8
     resources:
       requests:
         memory: 512Mi
-        cpu: 500m
+        cpu: "2000m"
       limits:
-        memory: 2Gi
-        cpu: "1"
+        memory: 6Gi
+        cpu: "8000m"
 
   # memory + vcores = resources each NodeManager advertises to YARN
   nodemanager:
@@ -95,10 +95,10 @@ hadoop:
     resources:
       requests:
         memory: 512Mi
-        cpu: 500m
+        cpu: "2000m"
       limits:
-        memory: 2Gi
-        cpu: "1"
+        memory: 6Gi
+        cpu: "8000m"
 
   home: /opt/hadoop-3.2.1    # Hadoop install path in bde2020 images
 
@@ -113,10 +113,10 @@ spark:
     resources:
       requests:
         memory: 512Mi
-        cpu: 500m
+        cpu: "2000m"
       limits:
-        memory: 2Gi
-        cpu: "1"
+        memory: 6Gi
+        cpu: "8000m"
 
   # cores + memory = resources each Worker registers with Master
   worker:
@@ -126,10 +126,10 @@ spark:
     resources:
       requests:
         memory: 512Mi
-        cpu: 500m
+        cpu: "2000m"
       limits:
-        memory: 2Gi
-        cpu: "1"
+        memory: 6Gi
+        cpu: "8000m"
 
   # GraphFrames package (Lab 7) — auto-downloaded via spark.jars.packages
   graphframes:
