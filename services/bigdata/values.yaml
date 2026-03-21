@@ -34,8 +34,10 @@
 # --- WORKER REPLICAS ---
 # Controls DataNode + NodeManager + SparkWorker count.
 # podAntiAffinity ensures no 2 pods of same type on same node.
+# Workers: helios (bigdata-worker) + diepvi (bigdata-worker)
+# sinister label removed — node unreliable, caused DataNode pipeline failures
 workers:
-  replicas: 3
+  replicas: 2
 
 # --- NODE SELECTORS ---
 management:
@@ -123,8 +125,14 @@ hadoop:
       readTimeoutMs: "60000"    # 60s read timeout per transfer chunk
       mergePercent: "0.55"      # start in-memory merge at 55% buffer full (default 0.66)
                                 # avoids buffer-full stall during slow cross-node transfers
-      maxAttempts: "10"         # fetch retry attempts before failing a single map output
+      maxAttempts: "20"         # was 10 → tolerate more transient fetch failures per map output
       keepAliveEnable: "true"   # reuse HTTP connections across fetches (reduce Tailscale handshakes)
+      maxFetchFailures: "20"    # max consecutive fetch failures before aborting shuffle (default 10)
+
+  # HDFS fault tolerance — prevent reducer write from aborting when a DataNode drops mid-job
+  hdfs:
+    replaceDatanodeOnFailureEnable: "false"   # don't abort pipeline when a DN disappears;
+                                              # continue writing to remaining nodes with reduced replication
 
   home: /opt/hadoop-3.2.1    # Hadoop install path in bde2020 images
 

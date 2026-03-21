@@ -77,6 +77,9 @@ spec:
             # bde2020 env → core-site.xml
             - name: CORE_CONF_fs_defaultFS
               value: "hdfs://hadoop-namenode:9000"
+            # bde2020 env → hdfs-site.xml
+            - name: HDFS_CONF_dfs_client_block_write_replace___datanode___on___failure_enable
+              value: {{ .Values.hadoop.hdfs.replaceDatanodeOnFailureEnable | quote }}
             # bde2020 env → yarn-site.xml
             - name: YARN_CONF_yarn_resourcemanager_hostname
               value: "hadoop-resourcemanager"
@@ -126,6 +129,8 @@ spec:
               value: {{ .Values.hadoop.mapreduce.shuffle.maxAttempts | quote }}
             - name: MAPRED_CONF_mapreduce_shuffle_connection___keep___alive___enable
               value: {{ .Values.hadoop.mapreduce.shuffle.keepAliveEnable | quote }}
+            - name: MAPRED_CONF_mapreduce_reduce_shuffle_maxfetchfailures
+              value: {{ .Values.hadoop.mapreduce.shuffle.maxFetchFailures | quote }}
           resources:
             requests:
               memory: {{ .Values.hadoop.nodemanager.resources.requests.memory | quote }}
