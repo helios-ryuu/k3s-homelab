@@ -37,7 +37,7 @@
 # Workers: helios (bigdata-worker) + diepvi (bigdata-worker)
 # sinister label removed — node unreliable, caused DataNode pipeline failures
 workers:
-  replicas: 2
+  replicas: 0
 
 # --- NODE SELECTORS ---
 management:

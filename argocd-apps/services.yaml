@@ -10,7 +10,6 @@ spec:
           - name: cloudflared
           - name: logging
           - name: oracle
-          - name: bigdata
           - name: redshark
           - name: sure
   template:
@@ -29,6 +28,3 @@ spec:
       syncPolicy:
         syncOptions:
           - CreateNamespace=true
-        automated:
-          prune: false
-          selfHeal: true
