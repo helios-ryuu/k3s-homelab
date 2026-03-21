@@ -60,11 +60,13 @@ kubectl logs -n bigdata -l app=spark-master -f
 > **Lưu ý quan trọng:** Scale bằng `kubectl scale` trực tiếp — không dùng `helm upgrade` — để tránh thay đổi `dfs.replication` làm crash NameNode.
 
 ```bash
-# Tắt worker
-kubectl scale statefulset hadoop-datanode hadoop-nodemgr spark-worker -n bigdata --replicas=0
+# Tắt worker (datanode + spark-worker là StatefulSet; nodemgr là Deployment)
+kubectl scale statefulset hadoop-datanode spark-worker -n bigdata --replicas=0
+kubectl scale deployment hadoop-nodemgr -n bigdata --replicas=0
 
 # Khôi phục / thêm worker
-kubectl scale statefulset hadoop-datanode hadoop-nodemgr spark-worker -n bigdata --replicas=3
+kubectl scale deployment hadoop-nodemgr -n bigdata --replicas=3
+kubectl scale statefulset hadoop-datanode spark-worker -n bigdata --replicas=3
 ```
 
 ---
@@ -269,6 +271,9 @@ hdfs dfs -rm -r ~/lab2/output            # xóa đệ quy
 | Pod Pending | Node worker offline | Chờ node hoạt động lại hoặc giảm replicas |
 | Ghi HDFS thất bại | DataNode chưa đăng ký xong (30-60s sau deploy) | Chờ và thử lại |
 | NameNode crash khi nâng cấp | `dfs.replication` bị thay đổi qua helm upgrade | Dùng `kubectl scale` thay thế |
+| MapReduce chạy local mode | Thiếu `MAPRED_CONF_mapreduce_framework_name=yarn` trong pod | Kiểm tra env vars trong `hadoop-namenode.yaml` |
+| Reduce OOM (Java heap space) | Quá nhiều key trong một reducer | `ItemPartitioner` + `numReducers=4` đã xử lý vấn đề này |
+| YARN vmem kill container | G1GC chiếm vmem lớn hơn pmem×2.1 | `vmem-check=false` và `pmem-check=false` đã tắt trong config |
 
 ---
 
