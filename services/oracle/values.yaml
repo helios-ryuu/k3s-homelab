@@ -29,7 +29,7 @@
 # =================================================================
 
 # Số lượng instance Oracle (2 = 2 instances độc lập)
-replicas: 2
+replicas: 0
 
 # Label để chọn node deploy Oracle
 oracle:
