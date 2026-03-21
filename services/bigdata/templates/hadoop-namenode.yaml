@@ -120,6 +120,8 @@ spec:
               value: {{ .Values.hadoop.mapreduce.reduce.memoryMb | quote }}
             - name: MAPRED_CONF_mapreduce_reduce_java_opts
               value: {{ .Values.hadoop.mapreduce.reduce.javaOpts | quote }}
+            - name: MAPRED_CONF_mapreduce_job_reduces
+              value: {{ .Values.hadoop.mapreduce.numReducers | quote }}
           resources:
             requests:
               memory: {{ .Values.hadoop.namenode.resources.requests.memory | quote }}

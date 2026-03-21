@@ -75,7 +75,7 @@ hadoop:
         cpu: "500m"
       limits:
         memory: 6Gi
-        cpu: "8000m"
+        cpu: "14000m"
 
   resourcemanager:
     image: bde2020/hadoop-resourcemanager:2.0.0-hadoop3.2.1-java8
@@ -91,23 +91,26 @@ hadoop:
   nodemanager:
     image: bde2020/hadoop-nodemanager:2.0.0-hadoop3.2.1-java8
     memory: 6144    # yarn.nodemanager.resource.memory-mb (match pod limit 6Gi)
-    vcores: 4       # yarn.nodemanager.resource.cpu-vcores
+    vcores: 8       # yarn.nodemanager.resource.cpu-vcores
     resources:
       requests:
         memory: 512Mi
         cpu: "500m"
       limits:
         memory: 6Gi
-        cpu: "8000m"
+        cpu: "14000m"
 
-  # MapReduce container memory — reduce needs large heap for ~1GB shuffle data
+  # MapReduce container memory + JVM tuning
+  # G1GC: concurrent GC avoids CPU spikes that stall reduce under CPU limit
+  # numReducers: split shuffle data across multiple reducers (~250MB each)
   mapreduce:
+    numReducers: "4"
     map:
       memoryMb: "1024"
-      javaOpts: "-Xmx768m"
+      javaOpts: "-Xmx768m -XX:+UseG1GC"
     reduce:
-      memoryMb: "4096"
-      javaOpts: "-Xmx3276m"
+      memoryMb: "1536"
+      javaOpts: "-Xmx1228m -XX:+UseG1GC -XX:ConcGCThreads=2 -XX:ParallelGCThreads=4 -XX:G1HeapRegionSize=16m"
 
   home: /opt/hadoop-3.2.1    # Hadoop install path in bde2020 images
 
@@ -138,7 +141,7 @@ spark:
         cpu: "500m"
       limits:
         memory: 6Gi
-        cpu: "8000m"
+        cpu: "14000m"
 
   # GraphFrames package (Lab 7) — auto-downloaded via spark.jars.packages
   graphframes:
