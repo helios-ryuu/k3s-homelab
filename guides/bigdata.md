@@ -12,8 +12,11 @@
 | `node-role.kubernetes.io/bigdata-worker=true` | DataNode, NodeManager, Spark Worker |
 
 ```bash
-kubectl label node <node> node-role.kubernetes.io/bigdata-master=true
-kubectl label node <node> node-role.kubernetes.io/bigdata-worker=true
+# Hiện tại: helios chạy cả master + worker; diepvi chạy worker
+# helios-imac-ubuntu và sinister không có role bigdata
+kubectl label node helios node-role.kubernetes.io/bigdata-master=true
+kubectl label node helios node-role.kubernetes.io/bigdata-worker=true
+kubectl label node diepvi node-role.kubernetes.io/bigdata-worker=true
 ```
 
 ---
