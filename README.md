@@ -14,8 +14,8 @@ Xem [SETUP.md](SETUP.md) để khởi tạo cụm từ đầu.
 | master-1 | `helios-imac-ubuntu` | Ubuntu | `100.102.51.39` | master | monitoring, logging, bigdata-master, localstack, sure |
 | master-2 | `helios-droplet-ubuntu` | Ubuntu | `100.122.163.31` | master | cloudflared |
 | master-3 | `helios` | Fedora | `100.110.86.71` | master | bigdata-worker, oracle-db-0 |
-| worker-1 | `diepvi` | Ubuntu | `100.86.204.84` | worker | **có thể offline** |
-| worker-2 | `sinister` | Ubuntu | `100.73.216.110` | worker | oracle-db-1 · **có thể offline** |
+| worker-1 | `diepvi` | Ubuntu | `100.86.204.84` | worker | bigdata-worker · **có thể offline** |
+| worker-2 | `sinister` | Ubuntu | `100.73.216.110` | worker | bigdata-worker, oracle-db-1 · **có thể offline** |
 
 ---
 

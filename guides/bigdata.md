@@ -35,7 +35,7 @@ services/bigdata/
     └── spark-worker.yaml     StatefulSet (workers)
 ```
 
-- `workers.replicas` mặc định 1; `dfs.replication` tự khớp với số worker
+- `workers.replicas` mặc định 3 (helios + sinister + diepvi); `dfs.replication` tự khớp với số worker
 - Hard anti-affinity: pod master không chạy trên node worker, 1 pod/node
 - hostPort cho WebUI — truy cập qua Tailscale IP
 
@@ -64,7 +64,7 @@ kubectl logs -n bigdata -l app=spark-master -f
 kubectl scale statefulset hadoop-datanode hadoop-nodemgr spark-worker -n bigdata --replicas=0
 
 # Khôi phục / thêm worker
-kubectl scale statefulset hadoop-datanode hadoop-nodemgr spark-worker -n bigdata --replicas=1
+kubectl scale statefulset hadoop-datanode hadoop-nodemgr spark-worker -n bigdata --replicas=3
 ```
 
 ---

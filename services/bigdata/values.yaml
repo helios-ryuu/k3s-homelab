@@ -35,7 +35,7 @@
 # Controls DataNode + NodeManager + SparkWorker count.
 # podAntiAffinity ensures no 2 pods of same type on same node.
 workers:
-  replicas: 1
+  replicas: 3
 
 # --- NODE SELECTORS ---
 management:
@@ -90,20 +90,20 @@ hadoop:
   # memory + vcores = resources each NodeManager advertises to YARN
   nodemanager:
     image: bde2020/hadoop-nodemanager:2.0.0-hadoop3.2.1-java8
-    memory: 16384   # yarn.nodemanager.resource.memory-mb (16GB: fits 4×4096 reduce containers)
-    vcores: 8       # yarn.nodemanager.resource.cpu-vcores
+    memory: 8192    # yarn.nodemanager.resource.memory-mb (8GB/node × 3 nodes = 24GB total)
+    vcores: 8       # yarn.nodemanager.resource.cpu-vcores (conservative for sinister 12C)
     resources:
       requests:
         memory: 512Mi
         cpu: "500m"
       limits:
-        memory: 18Gi
-        cpu: "14000m"
+        memory: 10Gi  # NM pod: 8GB YARN containers + NM overhead
+        cpu: "12000m" # respect sinister (12C), helios/diepvi get more anyway
 
   # MapReduce container memory + JVM tuning
-  # Custom ItemPartitioner in RetailAnalysis.java routes all keys for item A
-  # to the same reducer → correct probability computation across 4 reducers.
-  # Each reducer handles ~1/4 of item space (~3GB data) → 4096MB container fits.
+  # ItemPartitioner partitions by first item A → count(A), count(A,B), count(A,B,C)
+  # land on same reducer → correct probability. 4 reducers × 4096MB = 16GB total,
+  # distributed across 3 NMs (24GB capacity) → all 4 run in parallel.
   mapreduce:
     numReducers: "4"
     map:
