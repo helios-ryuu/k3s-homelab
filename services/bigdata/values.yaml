@@ -90,27 +90,28 @@ hadoop:
   # memory + vcores = resources each NodeManager advertises to YARN
   nodemanager:
     image: bde2020/hadoop-nodemanager:2.0.0-hadoop3.2.1-java8
-    memory: 6144    # yarn.nodemanager.resource.memory-mb (match pod limit 6Gi)
+    memory: 12288   # yarn.nodemanager.resource.memory-mb (12GB: fits 4×3072 reduce containers)
     vcores: 8       # yarn.nodemanager.resource.cpu-vcores
     resources:
       requests:
         memory: 512Mi
         cpu: "500m"
       limits:
-        memory: 6Gi
+        memory: 14Gi
         cpu: "14000m"
 
   # MapReduce container memory + JVM tuning
   # G1GC: concurrent GC avoids CPU spikes that stall reduce under CPU limit
-  # numReducers: split shuffle data across multiple reducers (~250MB each)
+  # numReducers=4 but reducer-0 skewed (low item IDs dominate retail.dat)
+  # → each container gets 3072MB so skewed reducer has enough heap
   mapreduce:
     numReducers: "4"
     map:
       memoryMb: "1024"
       javaOpts: "-Xmx768m -XX:+UseG1GC"
     reduce:
-      memoryMb: "2048"
-      javaOpts: "-Xmx1638m -XX:+UseG1GC -XX:ConcGCThreads=2 -XX:ParallelGCThreads=4 -XX:G1HeapRegionSize=16m"
+      memoryMb: "3072"
+      javaOpts: "-Xmx2457m -XX:+UseG1GC -XX:ConcGCThreads=2 -XX:ParallelGCThreads=4 -XX:G1HeapRegionSize=16m"
 
   home: /opt/hadoop-3.2.1    # Hadoop install path in bde2020 images
 
