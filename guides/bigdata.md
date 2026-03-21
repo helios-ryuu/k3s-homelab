@@ -231,11 +231,17 @@ hdfs dfs -count ~/lab2/retail/input
 # Phải thấy file input tồn tại
 ```
 
-Nếu chưa có dữ liệu, đưa file lên:
+> **Lưu ý đường dẫn HDFS:** Shell mở rộng `~` thành `/root` trước khi truyền vào lệnh.
+> Hadoop nhận `/root/lab2/retail/input` và tìm trên HDFS tại đường dẫn tuyệt đối đó.
+> Vì vậy dữ liệu phải được upload lên HDFS tại `/root/lab2/...` (không phải `/user/root/lab2/...`).
+
+Nếu chưa có dữ liệu:
 
 ```bash
-hdfs dfs -mkdir -p ~/lab2/retail/input
-hdfs dfs -put /path/to/local/retail_data.txt ~/lab2/retail/input/
+# Tạo thư mục trên HDFS tại đường dẫn khớp với ~/
+hdfs dfs -mkdir -p /root/lab2/retail/input
+# Upload dữ liệu từ local vào đó
+hdfs dfs -put ~/lab2/retail.dat /root/lab2/retail/input/
 ```
 
 #### Bước 4 — Xoá output cũ (bắt buộc trước mỗi lần chạy lại)
