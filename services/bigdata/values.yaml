@@ -109,8 +109,8 @@ hadoop:
       memoryMb: "1024"
       javaOpts: "-Xmx768m -XX:+UseG1GC"
     reduce:
-      memoryMb: "1536"
-      javaOpts: "-Xmx1228m -XX:+UseG1GC -XX:ConcGCThreads=2 -XX:ParallelGCThreads=4 -XX:G1HeapRegionSize=16m"
+      memoryMb: "2048"
+      javaOpts: "-Xmx1638m -XX:+UseG1GC -XX:ConcGCThreads=2 -XX:ParallelGCThreads=4 -XX:G1HeapRegionSize=16m"
 
   home: /opt/hadoop-3.2.1    # Hadoop install path in bde2020 images
 

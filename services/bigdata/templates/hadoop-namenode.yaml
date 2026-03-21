@@ -103,6 +103,10 @@ spec:
               value: "hadoop-resourcemanager"
             - name: YARN_CONF_yarn_nodemanager_aux___services
               value: "mapreduce_shuffle"
+            - name: YARN_CONF_yarn_nodemanager_vmem___check___enabled
+              value: "false"
+            - name: YARN_CONF_yarn_nodemanager_pmem___check___enabled
+              value: "false"
             # bde2020 env → mapred-site.xml (enables YARN mode, not local mode)
             - name: MAPRED_CONF_mapreduce_framework_name
               value: "yarn"

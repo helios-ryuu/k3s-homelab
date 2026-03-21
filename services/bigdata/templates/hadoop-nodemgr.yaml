@@ -86,6 +86,12 @@ spec:
               value: {{ .Values.hadoop.nodemanager.memory | quote }}
             - name: YARN_CONF_yarn_nodemanager_resource_cpu___vcores
               value: {{ .Values.hadoop.nodemanager.vcores | quote }}
+            # Disable vmem check — G1GC reserves large virtual memory in containers
+            # causing YARN to kill containers that are physically within limits
+            - name: YARN_CONF_yarn_nodemanager_vmem___check___enabled
+              value: "false"
+            - name: YARN_CONF_yarn_nodemanager_pmem___check___enabled
+              value: "false"
             # bde2020 env → mapred-site.xml
             - name: MAPRED_CONF_mapreduce_framework_name
               value: "yarn"
