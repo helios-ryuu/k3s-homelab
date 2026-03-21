@@ -90,28 +90,28 @@ hadoop:
   # memory + vcores = resources each NodeManager advertises to YARN
   nodemanager:
     image: bde2020/hadoop-nodemanager:2.0.0-hadoop3.2.1-java8
-    memory: 12288   # yarn.nodemanager.resource.memory-mb (12GB: fits 4×3072 reduce containers)
+    memory: 16384   # yarn.nodemanager.resource.memory-mb (16GB: fits 4×4096 reduce containers)
     vcores: 8       # yarn.nodemanager.resource.cpu-vcores
     resources:
       requests:
         memory: 512Mi
         cpu: "500m"
       limits:
-        memory: 14Gi
+        memory: 18Gi
         cpu: "14000m"
 
   # MapReduce container memory + JVM tuning
-  # G1GC: concurrent GC avoids CPU spikes that stall reduce under CPU limit
-  # numReducers=4 but reducer-0 skewed (low item IDs dominate retail.dat)
-  # → each container gets 3072MB so skewed reducer has enough heap
+  # Custom ItemPartitioner in RetailAnalysis.java routes all keys for item A
+  # to the same reducer → correct probability computation across 4 reducers.
+  # Each reducer handles ~1/4 of item space (~3GB data) → 4096MB container fits.
   mapreduce:
     numReducers: "4"
     map:
       memoryMb: "1024"
       javaOpts: "-Xmx768m -XX:+UseG1GC"
     reduce:
-      memoryMb: "3072"
-      javaOpts: "-Xmx2457m -XX:+UseG1GC -XX:ConcGCThreads=2 -XX:ParallelGCThreads=4 -XX:G1HeapRegionSize=16m"
+      memoryMb: "4096"
+      javaOpts: "-Xmx3276m -XX:+UseG1GC -XX:ConcGCThreads=2 -XX:ParallelGCThreads=4 -XX:G1HeapRegionSize=32m"
 
   home: /opt/hadoop-3.2.1    # Hadoop install path in bde2020 images
 
