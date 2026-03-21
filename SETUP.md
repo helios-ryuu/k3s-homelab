@@ -128,9 +128,8 @@ kubectl label node helios \
     node-role.kubernetes.io/bigdata-worker=true \
     node-role.kubernetes.io/database-oracle=true
 
-# worker-2 (sinister) — bigdata-worker, oracle
+# worker-2 (sinister) — oracle only
 kubectl label node sinister \
-    node-role.kubernetes.io/bigdata-worker=true \
     node-role.kubernetes.io/database-oracle=true
 ```
 

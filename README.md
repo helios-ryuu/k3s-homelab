@@ -15,7 +15,7 @@ Xem [SETUP.md](SETUP.md) để khởi tạo cụm từ đầu.
 | master-2 | `helios-droplet-ubuntu` | Ubuntu | `100.122.163.31` | master | cloudflared |
 | master-3 | `helios` | Fedora | `100.110.86.71` | master | bigdata-worker, oracle-db-0 |
 | worker-1 | `diepvi` | Ubuntu | `100.86.204.84` | worker | **có thể offline** |
-| worker-2 | `sinister` | Ubuntu | `100.73.216.110` | worker | bigdata-worker, oracle-db-1 · **có thể offline** |
+| worker-2 | `sinister` | Ubuntu | `100.73.216.110` | worker | oracle-db-1 · **có thể offline** |
 
 ---
 
@@ -191,8 +191,8 @@ kubectl scale sts hadoop-namenode   -n bigdata --replicas=0
 kubectl scale sts hadoop-namenode   -n bigdata --replicas=1
 kubectl scale deploy hadoop-rmgr    -n bigdata --replicas=1
 kubectl scale deploy hadoop-nodemgr -n bigdata --replicas=1
-kubectl scale sts hadoop-datanode   -n bigdata --replicas=3
-kubectl scale sts spark-worker      -n bigdata --replicas=2
+kubectl scale sts hadoop-datanode   -n bigdata --replicas=1
+kubectl scale sts spark-worker      -n bigdata --replicas=1
 ```
 
 > Sau khi scale, ArgoCD sẽ thấy OutOfSync. **Không sync** khi đang scale-down.

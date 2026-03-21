@@ -7,7 +7,7 @@
 #     DataNode (HDFS storage), NodeManager (YARN executor), Spark Worker
 #
 # Node offline tolerance:
-#   1 worker offline → that worker's pods Pending (HDFS still serves from other replicas)
+#   Worker offline → pods Pending; HDFS unavailable until node recovers
 #   Management pods pinned to master → stable as long as master is up
 #
 # Access:
@@ -17,7 +17,7 @@
 #   Worker WebUI: http://<worker-ip>:8081
 #
 # Scale workers:
-#   bash ./services/bigdata.sh scale 2   # restore 2 workers (default)
+#   bash ./services/bigdata.sh scale 1   # restore 1 worker (default)
 #   bash ./services/bigdata.sh scale 0   # scale down all (avoids HDFS crash-restart loop)
 #
 # Run interactive PySpark:
@@ -35,7 +35,7 @@
 # Controls DataNode + NodeManager + SparkWorker count.
 # podAntiAffinity ensures no 2 pods of same type on same node.
 workers:
-  replicas: 2
+  replicas: 1
 
 # --- NODE SELECTORS ---
 management:

@@ -98,6 +98,20 @@ spec:
               value: "false"
             - name: HDFS_CONF_dfs_permissions_enabled
               value: "false"
+            # bde2020 env → yarn-site.xml (needed to submit MapReduce jobs from this pod)
+            - name: YARN_CONF_yarn_resourcemanager_hostname
+              value: "hadoop-resourcemanager"
+            - name: YARN_CONF_yarn_nodemanager_aux___services
+              value: "mapreduce_shuffle"
+            # bde2020 env → mapred-site.xml (enables YARN mode, not local mode)
+            - name: MAPRED_CONF_mapreduce_framework_name
+              value: "yarn"
+            - name: MAPRED_CONF_yarn_app_mapreduce_am_env
+              value: "HADOOP_MAPRED_HOME={{ .Values.hadoop.home }}/"
+            - name: MAPRED_CONF_mapreduce_map_env
+              value: "HADOOP_MAPRED_HOME={{ .Values.hadoop.home }}/"
+            - name: MAPRED_CONF_mapreduce_reduce_env
+              value: "HADOOP_MAPRED_HOME={{ .Values.hadoop.home }}/"
           resources:
             requests:
               memory: {{ .Values.hadoop.namenode.resources.requests.memory | quote }}
