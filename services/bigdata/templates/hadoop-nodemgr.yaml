@@ -111,6 +111,21 @@ spec:
               value: {{ .Values.hadoop.mapreduce.reduce.javaOpts | quote }}
             - name: MAPRED_CONF_mapreduce_job_reduces
               value: {{ .Values.hadoop.mapreduce.numReducers | quote }}
+            - name: MAPRED_CONF_mapreduce_task_timeout
+              value: {{ .Values.hadoop.mapreduce.taskTimeoutMs | quote }}
+            # Shuffle tuning — Tailscale VPN adds latency; default settings cause stalls
+            - name: MAPRED_CONF_mapreduce_reduce_shuffle_parallelcopies
+              value: {{ .Values.hadoop.mapreduce.shuffle.parallelCopies | quote }}
+            - name: MAPRED_CONF_mapreduce_reduce_shuffle_connect_timeout
+              value: {{ .Values.hadoop.mapreduce.shuffle.connectTimeoutMs | quote }}
+            - name: MAPRED_CONF_mapreduce_reduce_shuffle_read_timeout
+              value: {{ .Values.hadoop.mapreduce.shuffle.readTimeoutMs | quote }}
+            - name: MAPRED_CONF_mapreduce_reduce_shuffle_merge_percent
+              value: {{ .Values.hadoop.mapreduce.shuffle.mergePercent | quote }}
+            - name: MAPRED_CONF_mapreduce_reduce_shuffle_maxattempts
+              value: {{ .Values.hadoop.mapreduce.shuffle.maxAttempts | quote }}
+            - name: MAPRED_CONF_mapreduce_shuffle_connection___keep___alive___enable
+              value: {{ .Values.hadoop.mapreduce.shuffle.keepAliveEnable | quote }}
           resources:
             requests:
               memory: {{ .Values.hadoop.nodemanager.resources.requests.memory | quote }}

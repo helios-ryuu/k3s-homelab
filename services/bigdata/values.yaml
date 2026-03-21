@@ -90,28 +90,41 @@ hadoop:
   # memory + vcores = resources each NodeManager advertises to YARN
   nodemanager:
     image: bde2020/hadoop-nodemanager:2.0.0-hadoop3.2.1-java8
-    memory: 8192    # yarn.nodemanager.resource.memory-mb (8GB/node × 3 nodes = 24GB total)
-    vcores: 8       # yarn.nodemanager.resource.cpu-vcores (conservative for sinister 12C)
+    memory: 5120    # yarn.nodemanager.resource.memory-mb
+                    # Budget per 8GB node: OS+K3s+Tailscale ~800MB, DataNode ~300MB,
+                    # SparkWorker ~300MB, NM daemon ~512MB → ~6100MB free → 5120MB (1GB buffer)
+    vcores: 6       # yarn.nodemanager.resource.cpu-vcores (leave headroom for OS+pods)
     resources:
       requests:
         memory: 512Mi
         cpu: "500m"
       limits:
-        memory: 10Gi  # NM pod: 8GB YARN containers + NM overhead
-        cpu: "12000m" # respect sinister (12C), helios/diepvi get more anyway
+        memory: 7Gi   # 5120MB YARN containers + ~1.5GB NM daemon overhead
+        cpu: "10000m"
 
   # MapReduce container memory + JVM tuning
   # ItemPartitioner partitions by first item A → count(A), count(A,B), count(A,B,C)
-  # land on same reducer → correct probability. 4 reducers × 4096MB = 16GB total,
-  # distributed across 3 NMs (24GB capacity) → all 4 run in parallel.
+  # land on same reducer → correct probability.
+  # 4 reducers × 2048MB = 8192MB total; each NM holds floor(5120/2048)=2 reducers
+  # → 4 reducers spread 2+1+1 across all 3 NMs (no single-node pile-up)
   mapreduce:
     numReducers: "4"
+    taskTimeoutMs: "1800000"   # 30 min (default 600s too short for Tailscale shuffle)
     map:
       memoryMb: "1024"
       javaOpts: "-Xmx768m -XX:+UseG1GC"
     reduce:
-      memoryMb: "4096"
-      javaOpts: "-Xmx3276m -XX:+UseG1GC -XX:ConcGCThreads=2 -XX:ParallelGCThreads=4 -XX:G1HeapRegionSize=32m"
+      memoryMb: "2048"         # was 4096 → halved so all 4 reducers spread across nodes
+      javaOpts: "-Xmx1536m -XX:+UseG1GC -XX:ConcGCThreads=1 -XX:ParallelGCThreads=2"
+    # Shuffle tuning for Tailscale VPN (cross-node latency 5-30ms, possible slow links)
+    shuffle:
+      parallelCopies: "10"      # parallel map-output fetches per reducer (default 5)
+      connectTimeoutMs: "30000" # 30s TCP connect timeout (Tailscale peer handshake can be slow)
+      readTimeoutMs: "60000"    # 60s read timeout per transfer chunk
+      mergePercent: "0.55"      # start in-memory merge at 55% buffer full (default 0.66)
+                                # avoids buffer-full stall during slow cross-node transfers
+      maxAttempts: "10"         # fetch retry attempts before failing a single map output
+      keepAliveEnable: "true"   # reuse HTTP connections across fetches (reduce Tailscale handshakes)
 
   home: /opt/hadoop-3.2.1    # Hadoop install path in bde2020 images
 

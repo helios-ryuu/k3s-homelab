@@ -208,6 +208,64 @@ hdfs dfs -rm -r ~/lab2/output            # xóa đệ quy
 
 ---
 
+### Lab 2 — MapReduce (chạy từ NameNode pod)
+
+#### Bước 1 — Vào NameNode
+
+```bash
+kubectl exec -it -n bigdata deploy/hadoop-namenode -- bash
+```
+
+#### Bước 2 — Xác minh YARN có đủ 3 NodeManager
+
+```bash
+yarn node -list
+# Phải thấy 3 node ở trạng thái RUNNING với ~5120 MB mỗi node
+```
+
+#### Bước 3 — Xác minh dữ liệu đầu vào trên HDFS
+
+```bash
+hdfs dfs -ls ~/lab2/retail/input
+hdfs dfs -count ~/lab2/retail/input
+# Phải thấy file input tồn tại
+```
+
+Nếu chưa có dữ liệu, đưa file lên:
+
+```bash
+hdfs dfs -mkdir -p ~/lab2/retail/input
+hdfs dfs -put /path/to/local/retail_data.txt ~/lab2/retail/input/
+```
+
+#### Bước 4 — Xoá output cũ (bắt buộc trước mỗi lần chạy lại)
+
+MapReduce sẽ báo lỗi nếu thư mục output đã tồn tại. Xoá sạch trước khi chạy:
+
+```bash
+hdfs dfs -rm -r ~/lab2/retail/output-pairs
+# Bỏ qua lỗi "No such file" — thư mục chưa tồn tại là bình thường
+```
+
+#### Bước 5 — Chạy job (thực thi tại đây)
+
+```bash
+hadoop jar ~/lab2/RetailAnalysis.jar RetailAnalysis \
+  ~/lab2/retail/input ~/lab2/retail/output-pairs
+```
+
+> Thời gian chờ: map ~10-15 phút, shuffle ~5-10 phút (qua Tailscale), reduce ~10-20 phút.
+> Nếu thấy reduce tiến độ tăng chậm nhưng không về 0% là bình thường — đang shuffle qua mạng.
+
+#### Bước 6 — Kiểm tra kết quả
+
+```bash
+hdfs dfs -ls ~/lab2/retail/output-pairs
+hdfs dfs -cat ~/lab2/retail/output-pairs/part-r-00000 | head -20
+```
+
+---
+
 ### WordCount — RDD (Spark Submit)
 
 ```bash
@@ -274,6 +332,9 @@ hdfs dfs -rm -r ~/lab2/output            # xóa đệ quy
 | MapReduce chạy local mode | Thiếu `MAPRED_CONF_mapreduce_framework_name=yarn` trong pod | Kiểm tra env vars trong `hadoop-namenode.yaml` |
 | Reduce OOM (Java heap space) | Quá nhiều key trong một reducer | `ItemPartitioner` + `numReducers=4` đã xử lý vấn đề này |
 | YARN vmem kill container | G1GC chiếm vmem lớn hơn pmem×2.1 | `vmem-check=false` và `pmem-check=false` đã tắt trong config |
+| Reducer timeout sau 600s | NM pod chưa restart sau khi deploy config mới | `kubectl rollout restart statefulset hadoop-nodemanager -n bigdata` rồi chờ 3 pod Running, xoá output HDFS và chạy lại |
+| Reducer dồn vào 1 máy (node RAM 6+ GB) | Reduce container quá lớn so với NM memory | Đã fix: `reduce.memoryMb=2048`, `NM.memory=5120` → 4 reducer phân bổ 2+1+1 qua 3 node |
+| Shuffle phase treo (progress không tăng 5-10 phút) | Tailscale latency cao khi copy map output qua mạng | Bình thường với mạng VPN — shuffle config đã tối ưu (`parallelCopies=10`, `keepAlive=true`) |
 
 ---
 
