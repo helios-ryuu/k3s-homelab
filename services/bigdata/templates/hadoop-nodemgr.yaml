@@ -95,6 +95,14 @@ spec:
               value: "HADOOP_MAPRED_HOME={{ .Values.hadoop.home }}/"
             - name: MAPRED_CONF_mapreduce_reduce_env
               value: "HADOOP_MAPRED_HOME={{ .Values.hadoop.home }}/"
+            - name: MAPRED_CONF_mapreduce_map_memory_mb
+              value: {{ .Values.hadoop.mapreduce.map.memoryMb | quote }}
+            - name: MAPRED_CONF_mapreduce_map_java_opts
+              value: {{ .Values.hadoop.mapreduce.map.javaOpts | quote }}
+            - name: MAPRED_CONF_mapreduce_reduce_memory_mb
+              value: {{ .Values.hadoop.mapreduce.reduce.memoryMb | quote }}
+            - name: MAPRED_CONF_mapreduce_reduce_java_opts
+              value: {{ .Values.hadoop.mapreduce.reduce.javaOpts | quote }}
           resources:
             requests:
               memory: {{ .Values.hadoop.nodemanager.resources.requests.memory | quote }}

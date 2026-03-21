@@ -90,8 +90,17 @@ hadoop:
   # memory + vcores = resources each NodeManager advertises to YARN
   nodemanager:
     image: bde2020/hadoop-nodemanager:2.0.0-hadoop3.2.1-java8
-    memory: 4096    # yarn.nodemanager.resource.memory-mb
-    vcores: 2       # yarn.nodemanager.resource.cpu-vcores
+    memory: 6144    # yarn.nodemanager.resource.memory-mb (match pod limit 6Gi)
+    vcores: 4       # yarn.nodemanager.resource.cpu-vcores
+
+  # MapReduce container memory — reduce needs large heap for ~1GB shuffle data
+  mapreduce:
+    map:
+      memoryMb: "1024"
+      javaOpts: "-Xmx768m"
+    reduce:
+      memoryMb: "4096"
+      javaOpts: "-Xmx3276m"
     resources:
       requests:
         memory: 512Mi
