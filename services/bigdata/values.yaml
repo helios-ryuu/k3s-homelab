@@ -107,17 +107,22 @@ hadoop:
   # MapReduce container memory + JVM tuning
   # ItemPartitioner partitions by first item A → count(A), count(A,B), count(A,B,C)
   # land on same reducer → correct probability.
-  # 4 reducers × 2048MB = 8192MB total; each NM holds floor(5120/2048)=2 reducers
-  # → 4 reducers spread 2+1+1 across all 3 NMs (no single-node pile-up)
+  # 4 reducers × 2560MB = 10240MB; each NM holds floor(5120/2560)=2 reducers
+  # → 4 reducers fit across 2 NMs in 1 wave (no restart needed)
+  #
+  # Observed job (retail.dat, 88k txns): map 194M spilled records due to default
+  # io.sort.mb=100MB; increased to 512MB → requires map container ≥ 2048MB.
+  # One reducer OOM-killed (peak 2022MB vs 2048MB limit) → bumped to 2560MB.
   mapreduce:
     numReducers: "4"
     taskTimeoutMs: "1800000"   # 30 min (default 600s too short for Tailscale shuffle)
     map:
-      memoryMb: "1024"
-      javaOpts: "-Xmx768m -XX:+UseG1GC"
+      memoryMb: "2048"         # was 1024 → needs room for 512MB sort buffer
+      javaOpts: "-Xmx1536m -XX:+UseG1GC"
+      sortMb: "512"            # mapreduce.task.io.sort.mb; default 100 → 194M spilled records
     reduce:
-      memoryMb: "2048"         # was 4096 → halved so all 4 reducers spread across nodes
-      javaOpts: "-Xmx1536m -XX:+UseG1GC -XX:ConcGCThreads=1 -XX:ParallelGCThreads=2"
+      memoryMb: "2560"         # was 2048 → peak 2022MB killed 1 reducer; 2560 gives headroom
+      javaOpts: "-Xmx2048m -XX:+UseG1GC -XX:ConcGCThreads=1 -XX:ParallelGCThreads=2"
     # Shuffle tuning for Tailscale VPN (cross-node latency 5-30ms, possible slow links)
     shuffle:
       parallelCopies: "10"      # parallel map-output fetches per reducer (default 5)

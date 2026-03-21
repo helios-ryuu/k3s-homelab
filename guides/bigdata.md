@@ -263,8 +263,10 @@ hadoop jar ~/lab2/RetailAnalysis.jar RetailAnalysis \
   ~/lab2/retail/input ~/lab2/retail/output-pairs
 ```
 
-> Thời gian chờ: map ~10-15 phút, shuffle ~5-10 phút (qua Tailscale), reduce ~10-20 phút.
-> Nếu thấy reduce tiến độ tăng chậm nhưng không về 0% là bình thường — đang shuffle qua mạng.
+> **Thời gian thực tế (retail.dat, 88k txns, 2 worker):**
+> Map ~2 phút · Shuffle+Sort ~10 phút · Reduce ~20 phút · **Tổng ~30 phút**
+> (Lần đầu có thể ~36 phút nếu cluster chưa warm-up hoặc có reducer bị OOM kill lần đầu)
+> Theo dõi tại YARN WebUI: http://100.110.86.71:8088
 
 #### Bước 6 — Kiểm tra kết quả
 
@@ -339,10 +341,10 @@ hdfs dfs -cat ~/lab2/retail/output-pairs/part-r-00000 | head -20
 | Ghi HDFS thất bại | DataNode chưa đăng ký xong (30-60s sau deploy) | Chờ và thử lại |
 | NameNode crash khi nâng cấp | `dfs.replication` bị thay đổi qua helm upgrade | Dùng `kubectl scale` thay thế |
 | MapReduce chạy local mode | Thiếu `MAPRED_CONF_mapreduce_framework_name=yarn` trong pod | Kiểm tra env vars trong `hadoop-namenode.yaml` |
-| Reduce OOM (Java heap space) | Quá nhiều key trong một reducer | `ItemPartitioner` + `numReducers=4` đã xử lý vấn đề này |
+| Reduce OOM / `Killed reduce tasks=1` | Heap vượt giới hạn container (peak ~2022MB vs limit 2048MB) | Đã fix: `reduce.memoryMb=2560`, `Xmx2048m`; `floor(5120/2560)=2` reducer/NM → 4 fit trong 1 wave |
+| Spilled Records cao (194M+) | `io.sort.mb=100` mặc định quá nhỏ cho 60M map records | Đã fix: `map.sortMb=512`, `map.memoryMb=2048`; giảm spill ~5× |
 | YARN vmem kill container | G1GC chiếm vmem lớn hơn pmem×2.1 | `vmem-check=false` và `pmem-check=false` đã tắt trong config |
-| Reducer timeout sau 600s | NM pod chưa restart sau khi deploy config mới | `kubectl rollout restart statefulset hadoop-nodemanager -n bigdata` rồi chờ 3 pod Running, xoá output HDFS và chạy lại |
-| Reducer dồn vào 1 máy (node RAM 6+ GB) | Reduce container quá lớn so với NM memory | Đã fix: `reduce.memoryMb=2048`, `NM.memory=5120` → 4 reducer phân bổ 2+1+1 qua 3 node |
+| Reducer timeout sau 600s | NM pod chưa restart sau khi deploy config mới | `kubectl rollout restart statefulset hadoop-nodemanager -n bigdata` rồi chờ pod Running, xoá output HDFS và chạy lại |
 | Shuffle phase treo (progress không tăng 5-10 phút) | Tailscale latency cao khi copy map output qua mạng | Bình thường với mạng VPN — shuffle config đã tối ưu (`parallelCopies=10`, `keepAlive=true`) |
 
 ---
