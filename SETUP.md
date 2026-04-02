@@ -115,27 +115,21 @@ sinister                Ready    <none>                 ...
 Mỗi workload dùng `nodeSelector` — gán đúng labels trước khi sync ArgoCD.
 
 ```bash
-# master-1 (helios-imac-ubuntu) — monitoring, logging, localstack, bigdata-master, sure
+# master-1 (helios-imac-ubuntu) — monitoring, logging, localstack
 kubectl label node helios-imac-ubuntu \
     node-role.kubernetes.io/monitoring=true \
     node-role.kubernetes.io/logging=true \
-    node-role.kubernetes.io/localstack=true \
-    node-role.kubernetes.io/bigdata-master=true \
-    app-host=sure
+    node-role.kubernetes.io/localstack=true
 
-# master-3 (helios) — bigdata-worker, oracle
+# master-3 (helios) — optional spare label
 kubectl label node helios \
-    node-role.kubernetes.io/bigdata-worker=true \
-    node-role.kubernetes.io/database-oracle=true
+    node-role.kubernetes.io/localstack=true
 
-# worker-1 (diepvi) — bigdata-worker
-kubectl label node diepvi \
-    node-role.kubernetes.io/bigdata-worker=true
+# worker-1 (diepvi) — no dedicated labels required
+kubectl label node diepvi node-role.kubernetes.io/worker=true
 
-# worker-2 (sinister) — bigdata-worker, oracle
-kubectl label node sinister \
-    node-role.kubernetes.io/bigdata-worker=true \
-    node-role.kubernetes.io/database-oracle=true
+# worker-2 (sinister) — no dedicated labels required
+kubectl label node sinister node-role.kubernetes.io/worker=true
 ```
 
 > **Kiểm tra:** `kubectl get nodes --show-labels`
@@ -159,24 +153,12 @@ LOCALSTACK_TOKEN=<localstack-pro-license-key>
 # Grafana
 GRAFANA_ADMIN_PASSWORD=<mật-khẩu-grafana>
 
-# Oracle
-ORACLE_PASSWORD=<mật-khẩu-sys-oracle>
-
-# Sure Finance
-SURE_POSTGRES_PASSWORD=<mật-khẩu-postgres-sure>
-
-# RedShark API (LocalStack PostgreSQL)
-REDSHARK_DB_USERNAME=<db-username-redshark>
-REDSHARK_DB_PASSWORD=<db-password-redshark>
 EOF
-
-# Tạo và lưu sure-secret-key-base ngay vào .env (phải ổn định qua mọi lần rebuild)
-echo "SURE_SECRET_KEY_BASE=$(head -c 64 /dev/urandom | od -An -tx1 | tr -d ' \n')" >> .env
 ```
 
 ### 2.2 Tham chiếu key mapping
 
-**`infra-secrets`** — trong các namespace: `cloudflared`, `localstack`, `monitoring`, `oracle`, `sure`, `kube-system`
+**`infra-secrets`** — trong các namespace: `cloudflared`, `localstack`, `monitoring`, `kube-system`
 
 | Key | Từ `.env` | Dùng bởi |
 |-----|-----------|----------|
@@ -184,16 +166,6 @@ echo "SURE_SECRET_KEY_BASE=$(head -c 64 /dev/urandom | od -An -tx1 | tr -d ' \n'
 | `localstack-token` | `LOCALSTACK_TOKEN` | localstack |
 | `grafana-admin-password` | `GRAFANA_ADMIN_PASSWORD` | monitoring |
 | `admin-user` / `admin-password` | hardcoded `admin` / `GRAFANA_ADMIN_PASSWORD` | monitoring (existingSecret) |
-| `oracle-password` | `ORACLE_PASSWORD` | oracle |
-| `sure-postgres-password` | `SURE_POSTGRES_PASSWORD` | sure |
-| `sure-secret-key-base` | `SURE_SECRET_KEY_BASE` | sure (Rails, tạo một lần trong `.env`) |
-
-**`redshark-secrets`** — chỉ trong namespace `redshark`
-
-| Key | Từ `.env` | Dùng bởi |
-|-----|-----------|----------|
-| `db-username` | `REDSHARK_DB_USERNAME` | redshark API |
-| `db-password` | `REDSHARK_DB_PASSWORD` | redshark API |
 
 > **Generate sealed secrets** được thực hiện ở **bước 3.6**, sau khi Sealed Secrets controller đã chạy.
 
@@ -304,17 +276,14 @@ Load `.env` và generate SealedSecret files:
 ```bash
 source .env
 
-# infra-secrets — 7 namespaces
-for NS in cloudflared localstack monitoring oracle sure kube-system; do
+# infra-secrets — 4 namespaces
+for NS in cloudflared localstack monitoring kube-system; do
     kubectl create secret generic infra-secrets \
         --from-literal=cloudflare-token="$CLOUDFLARE_TOKEN" \
         --from-literal=localstack-token="$LOCALSTACK_TOKEN" \
         --from-literal=grafana-admin-password="$GRAFANA_ADMIN_PASSWORD" \
         --from-literal=admin-user="admin" \
         --from-literal=admin-password="$GRAFANA_ADMIN_PASSWORD" \
-        --from-literal=oracle-password="$ORACLE_PASSWORD" \
-        --from-literal=sure-secret-key-base="$SURE_SECRET_KEY_BASE" \
-        --from-literal=sure-postgres-password="$SURE_POSTGRES_PASSWORD" \
         -n "$NS" --dry-run=client -o yaml \
     | kubeseal \
         --controller-name=sealed-secrets-controller \
@@ -322,17 +291,6 @@ for NS in cloudflared localstack monitoring oracle sure kube-system; do
         --format yaml --namespace "$NS" \
     > "secrets/infra-secrets-${NS}.yaml"
 done
-
-# redshark-secrets
-kubectl create secret generic redshark-secrets \
-    --from-literal=db-username="$REDSHARK_DB_USERNAME" \
-    --from-literal=db-password="$REDSHARK_DB_PASSWORD" \
-    -n redshark --dry-run=client -o yaml \
-| kubeseal \
-    --controller-name=sealed-secrets-controller \
-    --controller-namespace=kube-system \
-    --format yaml --namespace redshark \
-> secrets/redshark-secrets-redshark.yaml
 ```
 
 Commit và push:
@@ -348,7 +306,6 @@ ArgoCD tự sync app `secrets` → controller decrypt → K8s Secrets tồn tạ
 ```bash
 kubectl get sealedsecret -A
 kubectl get secret infra-secrets -n monitoring
-kubectl get secret redshark-secrets -n redshark
 ```
 
 **Backup controller key ngay** (cần để rebuild cluster mà không re-seal):
@@ -386,9 +343,6 @@ kubectl create secret generic infra-secrets \
     --from-literal=grafana-admin-password="$GRAFANA_ADMIN_PASSWORD" \
     --from-literal=admin-user="admin" \
     --from-literal=admin-password="$GRAFANA_ADMIN_PASSWORD" \
-    --from-literal=oracle-password="$ORACLE_PASSWORD" \
-    --from-literal=sure-secret-key-base="$SURE_SECRET_KEY_BASE" \
-    --from-literal=sure-postgres-password="$SURE_POSTGRES_PASSWORD" \
     -n cloudflared --dry-run=client -o yaml \
 | kubeseal \
     --controller-name=sealed-secrets-controller \
@@ -453,15 +407,8 @@ acd app sync monitoring && acd app wait monitoring --health
 # LocalStack
 acd app sync localstack && acd app wait localstack --health
 
-# Database
-acd app sync oracle
-
-# BigData
-acd app sync bigdata
-
 # Apps
 acd app sync headlamp
-acd app sync sure
 
 # Xem trạng thái tất cả
 acd app list
@@ -473,21 +420,7 @@ acd app list
 
 ---
 
-## 5. CI/CD — GitHub Actions (NT118.Q22)
-
-Thêm secret vào repo NT118.Q22 để GitHub Actions có thể cập nhật image tag trong repo này:
-
-> github.com/helios-ryuu/NT118.Q22 → Settings → Secrets and variables → Actions → New repository secret
-
-| Secret | Giá trị |
-|--------|---------|
-| `K3S_HOMELAB_PAT` | Fine-grained PAT với quyền **Contents: Read and Write** trên repo `k3s-homelab` |
-
-Tạo PAT: GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens → chọn repo `k3s-homelab` → Contents: Read and Write.
-
----
-
-## 6. Thêm node mới
+## 5. Thêm node mới
 
 ### Điều kiện
 

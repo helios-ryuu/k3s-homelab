@@ -11,11 +11,11 @@ Xem [SETUP.md](SETUP.md) để khởi tạo cụm từ đầu.
 
 | Node | Hostname | OS | Tailscale IP | Vai trò | Workloads |
 |------|----------|-----|--------------|---------|-----------|
-| master-1 | `helios-imac-ubuntu` | Ubuntu | `100.102.51.39` | master | monitoring, logging, bigdata-master, localstack, sure |
+| master-1 | `helios-imac-ubuntu` | Ubuntu | `100.102.51.39` | master | monitoring, logging, localstack |
 | master-2 | `helios-droplet-ubuntu` | Ubuntu | `100.122.163.31` | master | cloudflared |
-| master-3 | `helios` | Fedora | `100.110.86.71` | master | bigdata-worker, oracle-db-0 |
-| worker-1 | `diepvi` | Ubuntu | `100.86.204.84` | worker | bigdata-worker · **có thể offline** |
-| worker-2 | `sinister` | Ubuntu | `100.73.216.110` | worker | bigdata-worker, oracle-db-1 · **có thể offline** |
+| master-3 | `helios` | Fedora | `100.110.86.71` | master | spare / control-plane |
+| worker-1 | `diepvi` | Ubuntu | `100.86.204.84` | worker | spare |
+| worker-2 | `sinister` | Ubuntu | `100.73.216.110` | worker | spare |
 
 ---
 
@@ -38,21 +38,6 @@ Xem [SETUP.md](SETUP.md) để khởi tạo cụm từ đầu.
 | Prometheus | `100.102.51.39` | `30090` |
 | Loki | `100.102.51.39` | `30100` |
 | LocalStack | `100.102.51.39` | `30566` |
-| Sure App | `100.102.51.39` | `30333` |
-| Oracle (db-0) | `100.110.86.71` | `31521` |
-| Oracle (db-1) | `100.73.216.110` | `31521` |
-| HDFS WebUI | `100.102.51.39` | `9870` |
-| YARN WebUI | `100.102.51.39` | `8088` |
-| Spark WebUI | `100.102.51.39` | `30808` |
-
-### Kết nối database nội bộ (trong cluster)
-
-```
-# Oracle
-oracle-db-0.oracle-svc.oracle.svc.cluster.local:1521
-oracle-db-1.oracle-svc.oracle.svc.cluster.local:1521
-# TNS alias (tnsnames.ora): LAB11PDB_0/1, LAB12PDB_0/1
-```
 
 ---
 
@@ -60,14 +45,10 @@ oracle-db-1.oracle-svc.oracle.svc.cluster.local:1521
 
 | Release | Namespace | Chart | Mô tả |
 |---------|-----------|-------|-------|
-| `bigd` | `bigdata` | local `services/bigdata/` | Hadoop 3.2.1 + Spark 3.5.8 |
-| `ora` | `oracle` | local `services/oracle/` | Oracle 19c (2 instances) |
 | `localstack` | `localstack` | `localstack/localstack` | LocalStack Pro (AWS emulator) |
 | `log` | `logging` | local `services/logging/` | Loki 3.6.7 + Grafana Alloy |
 | `mon` | `monitoring` | `prometheus-community/kube-prometheus-stack` `82.x` | Prometheus + Grafana |
 | `cfd` | `cloudflared` | local `services/cloudflared/` | Cloudflare Tunnel (2 replicas) |
-| — | `sure` | raw manifests `services/sure/` | Sure Finance App (Rails + PG + Redis) |
-| — | `redshark` | local `services/redshark/` | RedShark API (Spring Boot) |
 
 ---
 
@@ -98,7 +79,7 @@ acd() { kubectl exec -n argocd deployment/argocd-server -- argocd "$@"; }
 ./ck.sh secrets            # [3/6] Secrets (theo namespace, chỉ hiện tên)
 ./ck.sh pvc                # [4/6] PVC / Storage (nhóm theo node)
 ./ck.sh res                # [5/6] Tài nguyên triển khai (deploy, sts, ds, hpa, svc)
-./ck.sh res <namespace>    # Lọc theo namespace (vd: ./ck.sh res bigdata)
+./ck.sh res <namespace>    # Lọc theo namespace (vd: ./ck.sh res logging)
 ./ck.sh img                # [6/6] Images & mức sử dụng theo node
 ./ck.sh helm               # Helm releases
 ./ck.sh export             # Xuất báo cáo → ck/ck-HHmmss-ddMMyy.txt
@@ -175,35 +156,6 @@ acd app sync <app>              # Sync lại
 
 ---
 
-## BigData — Scale thủ công
-
-HDFS yêu cầu scale theo thứ tự để tránh mất dữ liệu:
-
-```bash
-# Scale DOWN (worker → nodemanager → resourcemanager → namenode)
-kubectl scale sts hadoop-datanode   -n bigdata --replicas=0
-kubectl scale sts spark-worker      -n bigdata --replicas=0
-kubectl scale deploy hadoop-nodemgr -n bigdata --replicas=0
-kubectl scale deploy hadoop-rmgr    -n bigdata --replicas=0
-kubectl scale sts hadoop-namenode   -n bigdata --replicas=0
-
-# Scale UP (namenode trước)
-kubectl scale sts hadoop-namenode   -n bigdata --replicas=1
-kubectl scale deploy hadoop-rmgr    -n bigdata --replicas=1
-kubectl scale deploy hadoop-nodemgr -n bigdata --replicas=1
-kubectl scale sts hadoop-datanode   -n bigdata --replicas=1
-kubectl scale sts spark-worker      -n bigdata --replicas=1
-```
-
-> Sau khi scale, ArgoCD sẽ thấy OutOfSync. **Không sync** khi đang scale-down.
-
-**Interactive PySpark:**
-```bash
-kubectl exec -it -n bigdata deploy/spark-master -- /opt/spark/bin/pyspark
-```
-
----
-
 ## Hành vi khi node offline
 
 | Tình huống | Kết quả |
@@ -213,30 +165,6 @@ kubectl exec -it -n bigdata deploy/spark-master -- /opt/spark/bin/pyspark
 | Scale lại | Pod tái tạo, mount lại PVC cũ |
 | 1/3 master offline | Cụm vẫn hoạt động (quorum 2/3) |
 | 2/3 master offline | **Mất quorum**, chỉ đọc |
-
----
-
-## CI/CD — GitHub Actions (NT118.Q22)
-
-```
-Push lên NT118.Q22
-        ↓
-GitHub Actions build Docker image → push registry
-        ↓
-Actions cập nhật image.tag trong services/redshark/values.yaml
-        ↓
-ArgoCD phát hiện OutOfSync → sync redshark
-        ↓
-Cluster rolling update
-```
-
-**Secret cần thiết trong repo NT118.Q22:**
-
-| Secret | Mô tả |
-|--------|-------|
-| `K3S_HOMELAB_PAT` | Fine-grained PAT trên repo `k3s-homelab` với quyền **Contents: Read and Write** |
-
-Tạo PAT: GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens.
 
 ---
 
@@ -254,32 +182,24 @@ k3s-homelab/
 │   ├── root.yaml           # Root Application — theo dõi argocd-apps/
 │   ├── sealed-secrets.yaml # Sealed Secrets controller (wave -2)
 │   ├── secrets.yaml        # SealedSecret objects từ secrets/ (wave -1)
-│   ├── services.yaml       # ApplicationSet — cloudflared, logging, oracle, bigdata, redshark, sure
+│   ├── services.yaml       # ApplicationSet — cloudflared, logging
 │   ├── headlamp.yaml       # Headlamp K8s dashboard (multi-source)
 │   ├── monitoring.yaml     # kube-prometheus-stack (multi-source)
 │   └── localstack.yaml     # LocalStack Pro (multi-source)
 ├── secrets/                # SealedSecret YAML (encrypted, safe to commit)
 ├── services/               # Helm charts và values
-│   ├── bigdata/            # Chart: Hadoop + Spark
-│   ├── oracle/             # Chart: Oracle 19c
 │   ├── logging/            # Chart: Loki + Alloy
 │   ├── monitoring/         # Values only: kube-prometheus-stack
 │   ├── headlamp/           # Values only: headlamp
 │   ├── cloudflared/        # Chart: Cloudflare Tunnel
-│   ├── localstack/         # Values only: localstack/localstack
-│   ├── sure/               # Raw K8s manifests
-│   └── redshark/           # Chart: RedShark API
+│   └── localstack/         # Values only: localstack/localstack
 ├── guides/                 # Tài liệu chi tiết từng dịch vụ
 │   ├── _lib.sh             # Shared helpers (màu sắc, functions) cho scripts
-│   ├── bigdata.md
 │   ├── cloudflared.md
-│   ├── database.md
 │   ├── headlamp.md
 │   ├── localstack.md
 │   ├── logging.md
-│   ├── monitoring.md
-│   ├── redshark.md
-│   └── sure.md
+│   └── monitoring.md
 └── ck/                     # Thư mục xuất báo cáo (gitignored)
 ```
 

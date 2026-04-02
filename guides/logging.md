@@ -78,25 +78,25 @@ kubectl logs -n logging -l app.kubernetes.io/name=alloy -f   # per-node DaemonSe
 
 ```logql
 # All logs from a namespace
-{namespace="bigdata"}
+{namespace="logging"}
 
 # Specific pod
-{namespace="oracle", pod="oracle-db-0"}
+{namespace="cloudflared", pod=~"cloudflared-.*"}
 
 # Case-insensitive text search
-{namespace="oracle"} |~ "(?i)error"
+{namespace="logging"} |~ "(?i)error"
 
 # Exclude noise
 {namespace="monitoring"} !~ "health"
 
 # Specific container
-{namespace="oracle", container="oracle-engine"}
+{namespace="logging", container="loki"}
 
 # Logs from a node
 {node="<node-name>"}
 
 # Parse JSON + filter
-{namespace="bigdata"} | json | level="ERROR"
+{namespace="logging"} | json | level="ERROR"
 
 # Log rate by namespace
 sum(rate({job=~".+"} [5m])) by (namespace)
@@ -125,7 +125,7 @@ curl -s https://loki.helios.id.vn/loki/api/v1/label/namespace/values | jq
 
 # Query logs (last 1h)
 curl -sG https://loki.helios.id.vn/loki/api/v1/query_range \
-  --data-urlencode 'query={namespace="bigdata"}' \
+  --data-urlencode 'query={namespace="logging"}' \
   --data-urlencode "start=$(date -d '1 hour ago' +%s)000000000" \
   --data-urlencode "end=$(date +%s)000000000" \
   --data-urlencode 'limit=10' | jq '.data.result[].values[][1]'

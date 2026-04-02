@@ -1,5 +1,0 @@
-apiVersion: v2
-name: bigdata
-description: Hadoop 3.2.1 (HDFS + YARN) + Spark 3.5.8 cluster cho K3s lab
-version: 1.0.0
-appVersion: "3.5.8"

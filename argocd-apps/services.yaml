@@ -9,9 +9,6 @@ spec:
         elements:
           - name: cloudflared
           - name: logging
-          - name: oracle
-          - name: redshark
-          - name: sure
   template:
     metadata:
       name: '{{name}}'
