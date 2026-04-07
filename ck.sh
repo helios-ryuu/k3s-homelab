@@ -187,6 +187,11 @@ section_sys() {
 section_node() {
     load_cache
     echo -e "\n${BLUE}--- [2/6] TOPOLOGY & K3S NODES ---${NC}"
+
+    # --- Collect raw data ---
+    local -a _NODE _STATUS _ROLE _VER _IP _LAT _NS
+    local idx=0
+
     for node in $SORTED_NODES; do
         ip=$(get_ts_ip "$node")
 
@@ -201,58 +206,75 @@ section_node() {
         ready_raw=$(echo "$node_info" | awk -F'\t' '{print $2}')
         ver_raw=$(echo "$node_info" | awk -F'\t' '{print $3}')
 
-        status_col="${GREEN}Ready${NC}"
-        [ "$ready_raw" != "True" ] && status_col="${RED}NotReady${NC}"
-
-        if [ "$role_raw" == "master" ]; then
-            role_col="${PURPLE}${role_raw}${NC}"
-        else
-            role_col="${ORANGE}${role_raw}${NC}"
-        fi
-
         latency="${PING_CACHE[$node]:-N/A}"
         [ "$latency" != "localhost" ] && [ "$latency" != "timeout" ] && [ "$latency" != "N/A" ] && latency="${latency}ms"
 
-        lat_col=$(echo "$latency" | awk '{
-            if ($1 == "localhost") print "'"${CYAN}"'" $1 "'"${NC}"'";
-            else if ($1 == "timeout" || $1 == "N/A") print "'"${RED}"'" $1 "'"${NC}"'";
-            else {
-                num=$1; sub("ms", "", num);
-                if (num+0 < 50) print "'"${GREEN}"'" $1 "'"${NC}"'";
-                else if (num+0 < 150) print "'"${YELLOW}"'" $1 "'"${NC}"'";
-                else print "'"${RED}"'" $1 "'"${NC}"'";
-            }
-        }')
+        status_txt="Ready"; [ "$ready_raw" != "True" ] && status_txt="NotReady"
 
-        echo -e "${CYAN}■ $node${NC} [${status_col} | ${role_col} | ${ver_raw} | IP: $ip | Ping: $lat_col]"
+        ns_summary=$(echo "$ALL_PODS" | awk -v n="$node" '$1==n {print $2}' \
+            | sort | uniq -c | awk '{printf "%s(%d) ", $2, $1}' | sed 's/ $//')
+        [ -z "$ns_summary" ] && ns_summary="-"
 
-        # Condensed labels on single line
-        NODE_LABELS=$(echo "$RAW_NODES_JSON" | jq -r --arg n "$node" '
-            .items[] | select(.metadata.name==$n) | .metadata.labels | to_entries[] |
-            select(.key | test("^(kubernetes\\.io|node\\.kubernetes\\.io|beta\\.kubernetes\\.io|k3s\\.io)") | not) |
-            "\(.key)=\(.value)"
-        ' 2>/dev/null)
-        if [ -n "$NODE_LABELS" ]; then
-            local labels_inline=$(echo "$NODE_LABELS" | paste -sd ", " -)
-            echo -e "  ${PURPLE}Labels: $labels_inline${NC}"
-        fi
+        _NODE[$idx]="$node"
+        _STATUS[$idx]="$status_txt"
+        _ROLE[$idx]="$role_raw"
+        _VER[$idx]="$ver_raw"
+        _IP[$idx]="$ip"
+        _LAT[$idx]="$latency"
+        _NS[$idx]="$ns_summary"
+        ((idx++))
+    done
 
-        NODE_NSS=$(echo "$ALL_PODS" | awk -v n="$node" '$1==n {print $2}' | sort -u)
-        if [ -z "$NODE_NSS" ]; then
-            echo -e "  └── ${CYAN}(Không có pod)${NC}"
+    # --- Compute column widths (plain text only) ---
+    local w_node=4 w_status=6 w_role=4 w_ver=7 w_ip=2 w_lat=4
+    for ((i=0; i<idx; i++)); do
+        (( ${#_NODE[$i]}   > w_node   )) && w_node=${#_NODE[$i]}
+        (( ${#_STATUS[$i]} > w_status )) && w_status=${#_STATUS[$i]}
+        (( ${#_ROLE[$i]}   > w_role   )) && w_role=${#_ROLE[$i]}
+        (( ${#_VER[$i]}    > w_ver    )) && w_ver=${#_VER[$i]}
+        (( ${#_IP[$i]}     > w_ip     )) && w_ip=${#_IP[$i]}
+        (( ${#_LAT[$i]}    > w_lat    )) && w_lat=${#_LAT[$i]}
+    done
+
+    # --- Print header ---
+    printf "${YELLOW}%-${w_node}s  %-${w_status}s  %-${w_role}s  %-${w_ver}s  %-${w_ip}s  %-${w_lat}s  %s${NC}\n" \
+        NODE STATUS ROLE VERSION IP PING NAMESPACES
+
+    # --- Print rows with color, preserving alignment ---
+    for ((i=0; i<idx; i++)); do
+        # Status color + right-pad to column width
+        if [ "${_STATUS[$i]}" = "Ready" ]; then
+            s_col="${GREEN}${_STATUS[$i]}${NC}$(printf '%*s' $((w_status - ${#_STATUS[$i]})) '')"
         else
-            arr_nss=($NODE_NSS)
-            count_nss=${#arr_nss[@]}
-            for (( i=0; i<count_nss; i++ )); do
-                ns="${arr_nss[$i]}"
-                pod_count=$(echo "$ALL_PODS" | awk -v n="$node" -v ns="$ns" '$1==n && $2==ns' | wc -l)
-                if [ $i -eq $((count_nss - 1)) ]; then
-                    echo -e "  └── ${GREEN}$ns${NC} ($pod_count pods)"
-                else
-                    echo -e "  ├── ${GREEN}$ns${NC} ($pod_count pods)"
-                fi
-            done
+            s_col="${RED}${_STATUS[$i]}${NC}$(printf '%*s' $((w_status - ${#_STATUS[$i]})) '')"
         fi
+
+        # Role color + right-pad
+        if [ "${_ROLE[$i]}" = "master" ]; then
+            r_col="${PURPLE}${_ROLE[$i]}${NC}$(printf '%*s' $((w_role - ${#_ROLE[$i]})) '')"
+        else
+            r_col="${ORANGE}${_ROLE[$i]}${NC}$(printf '%*s' $((w_role - ${#_ROLE[$i]})) '')"
+        fi
+
+        # Ping color + right-pad
+        lat="${_LAT[$i]}"
+        case "$lat" in
+            localhost) lat_col="${CYAN}${lat}${NC}" ;;
+            timeout|N/A) lat_col="${RED}${lat}${NC}" ;;
+            *)
+                num="${lat%ms}"
+                if awk "BEGIN{exit !($num+0 < 50)}"; then
+                    lat_col="${GREEN}${lat}${NC}"
+                elif awk "BEGIN{exit !($num+0 < 150)}"; then
+                    lat_col="${YELLOW}${lat}${NC}"
+                else
+                    lat_col="${RED}${lat}${NC}"
+                fi
+                ;;
+        esac
+        lat_col+="$(printf '%*s' $((w_lat - ${#lat})) '')"
+
+        echo -e "$(printf "%-${w_node}s" "${_NODE[$i]}")  ${s_col}  ${r_col}  $(printf "%-${w_ver}s" "${_VER[$i]}")  $(printf "%-${w_ip}s" "${_IP[$i]}")  ${lat_col}  ${_NS[$i]}"
     done
 
     echo -e "\n${CYAN}PODS LAYOUT:${NC}"
